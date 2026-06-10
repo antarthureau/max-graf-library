@@ -558,7 +558,7 @@ void graf_traverse_output_node(t_graf_traverse *x, t_graf *g, t_symbol *id)
     }
 
     if (node->payload_count == 0) {
-        outlet_symbol(x->outlet_node, id);
+        outlet_anything(x->outlet_node, id, 0, NULL);
     } else {
         outlet_anything(x->outlet_node, id, (short)node->payload_count, node->payload);
     }
