@@ -1,6 +1,6 @@
 /**
     @file
-    graf - directed weighted graph data structure for Max/MSP
+    graf — directed weighted graph data structure for Max/MSP
     antoine hureau-parreira
 
     Message interface:
@@ -16,10 +16,18 @@
         adjacent <u> <v>           — output 1 if edge u->v exists, 0 otherwise
         size                       — output number of nodes
         print                      — dump full graph to Max console
+        clear                      — remove all nodes and edges, reset state
+        write <filename>           — save graph to CSV file
+        read  <filename>           — load graph from CSV file (clears existing graph first)
+
+    CSV file format:
+        # comment lines (leading # after optional whitespace)
+        n, id [, payload...]        — node declaration
+        e, from, to [, weight]      — edge declaration (weight defaults to 0.0)
 
     Instance naming:
-        graf my_graph              — named instance, referenceable by other objects
-        graf                       — auto-named (graf_0, graf_1, ...), still functional
+        graf my_graph               — named instance, referenceable by other objects
+        graf                        — auto-named (graf_0, graf_1, ...), still functional
 
     Basic sequencer usage:
         - addnode to build states (nodes carry pitch/duration/velocity as payload)
@@ -27,61 +35,37 @@
         - goto to manually place the playhead at any node
         - next to let the graph autonomously move to a neighbour
         - bang to trigger the current state (outputs to outlet)
+        - write my_graph.csv to save; read my_graph.csv to restore
 */
 
 #include "ext.h"
 #include "ext_obex.h"
+#include "graf.h"        /* t_graf_node, t_graf, graf_find_node(), graf_find() */
 #include <string.h>
+#include <stdlib.h>      /* strtol, strtod */
 
 /* Initial capacity for the nodes array.
    Will double automatically when exceeded (like Java ArrayList). */
-#define GRAF_INIT_CAPACITY 16
+#define GRAF_INIT_CAPACITY       16
 
 /* Prefix used for auto-generated instance names when user doesn't specify one */
-#define GRAF_AUTO_NAME_PREFIX "graf_"
+#define GRAF_AUTO_NAME_PREFIX    "graf_"
 
 /* Prefix used for auto-generated node IDs when user doesn't specify one */
-#define GRAF_AUTO_NODE_PREFIX "node"
+#define GRAF_AUTO_NODE_PREFIX    "node"
+
+/* CSV parser limits.
+   GRAF_CSV_TOKEN_LEN caps the length of any single token (id, atom value).
+   GRAF_CSV_MAX_TOKENS caps the number of columns per line (id + payload atoms). */
+#define GRAF_CSV_MAX_TOKENS      32
+#define GRAF_CSV_TOKEN_LEN       128
+#define GRAF_CSV_LINE_LEN        512
 
 /* Global counter for auto-naming graf instances */
 static long graf_instance_count = 0;
 
-
-////////////////////////// data structures
-
-/**
- * A single node in the graph.
- * Equivalent to a vertex V in IGraph<V>.
- *
- * The node holds:
- *   - an identifier (t_symbol*, compared by pointer like .equals() in Java)
- *   - an optional payload (any sequence of Max atoms: ints, floats, symbols)
- *   - a dynamic list of outgoing directed edges with weights
- */
-typedef struct _graf_node {
-    t_symbol   *id;             // node identifier
-    t_atom     *payload;        // optional data attached to this node
-    long        payload_count;
-    t_symbol  **edges_to;       // array of target node IDs (outgoing edges only)
-    double     *edge_weights;   // weight for each outgoing edge
-    long        edge_count;
-} t_graf_node;
-
-/**
- * The graf object itself.
- * Holds a dynamic array of nodes and a current traversal position.
- * Can be registered by name so other objects (e.g. graf.traverse) can find it.
- */
-typedef struct _graf {
-    t_object    ob;
-    void       *outlet;
-    t_symbol   *name;           // registered instance name
-    t_graf_node *nodes;         // dynamic array (grows by doubling like ArrayList)
-    long        node_count;
-    long        node_capacity;
-    long        next_node_id;   // auto-increment counter for anonymous nodes
-    t_symbol   *current;        // currently selected node (for traversal)
-} t_graf;
+/* NOTE: t_graf_node and t_graf are defined in graf.h.
+   graf_find_node() is a static inline in graf.h — do not redefine here. */
 
 
 ////////////////////////// function prototypes
@@ -90,7 +74,7 @@ void *graf_new(t_symbol *s, long argc, t_atom *argv);
 void  graf_free(t_graf *x);
 void  graf_assist(t_graf *x, void *b, long m, long a, char *s);
 
-// message handlers
+/* message handlers */
 void  graf_bang(t_graf *x);
 void  graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_removenode(t_graf *x, t_symbol *id);
@@ -103,13 +87,33 @@ void  graf_neighbours(t_graf *x, t_symbol *id);
 void  graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_size(t_graf *x);
 void  graf_print(t_graf *x);
+void  graf_clear(t_graf *x);
+void  graf_write(t_graf *x, t_symbol *filename);
+void  graf_read(t_graf *x, t_symbol *filename);
 
-// internal helpers
-t_graf_node *graf_find_node(t_graf *x, t_symbol *id);
-long         graf_find_node_index(t_graf *x, t_symbol *id);
-void         graf_ensure_capacity(t_graf *x);
+/* internal helpers — graph structure */
+long  graf_find_node_index(t_graf *x, t_symbol *id);
+void  graf_ensure_capacity(t_graf *x);
 
-// global class pointer
+/* internal helpers — quiet core operations (no console output).
+   Message handlers call these and then post() on success.
+   The read path calls these directly to avoid console spam on bulk load. */
+static int  graf_addnode_quiet(t_graf *x, t_symbol *id,
+                               long payload_count, t_atom *payload);
+static int  graf_addedge_quiet(t_graf *x, t_symbol *u,
+                               t_symbol *v, double weight);
+
+/* internal helpers — file I/O */
+static void  graf_write_to_handle(t_graf *x, t_filehandle fh);
+static void  graf_sysfile_write_str(t_filehandle fh, const char *str);
+static void  graf_atom_to_str(const t_atom *a, char *buf, long maxlen);
+static long  graf_csv_tokenize(char *line,
+                               char tokens[][GRAF_CSV_TOKEN_LEN],
+                               long max_tokens);
+static void  graf_parse_atom_str(const char *str, t_atom *a);
+static void  graf_load_from_buffer(t_graf *x, char *buf, t_ptr_size count);
+
+/* global class pointer */
 void *graf_class;
 
 
@@ -125,28 +129,33 @@ void ext_main(void *r)
                   (long)sizeof(t_graf),
                   0L, A_GIMME, 0);
 
-    // inlet/outlet tooltip
+    /* inlet/outlet tooltip */
     class_addmethod(c, (method)graf_assist,     "assist",      A_CANT,  0);
 
-    // output current node
+    /* output current node */
     class_addmethod(c, (method)graf_bang,        "bang",        0);
 
-    // graph structure operations
+    /* graph structure */
     class_addmethod(c, (method)graf_addnode,     "addnode",     A_GIMME, 0);
     class_addmethod(c, (method)graf_removenode,  "removenode",  A_SYM,   0);
     class_addmethod(c, (method)graf_addedge,     "addedge",     A_GIMME, 0);
     class_addmethod(c, (method)graf_removeedge,  "removeedge",  A_GIMME, 0);
 
-    // traversal
+    /* traversal */
     class_addmethod(c, (method)graf_goto,        "goto",        A_SYM,   0);
     class_addmethod(c, (method)graf_next,        "next",        0);
 
-    // queries
+    /* queries */
     class_addmethod(c, (method)graf_hasnode,     "hasnode",     A_SYM,   0);
     class_addmethod(c, (method)graf_neighbours,  "neighbours",  A_SYM,   0);
     class_addmethod(c, (method)graf_adjacent,    "adjacent",    A_GIMME, 0);
     class_addmethod(c, (method)graf_size,        "size",        0);
     class_addmethod(c, (method)graf_print,       "print",       0);
+
+    /* persistence */
+    class_addmethod(c, (method)graf_clear,       "clear",       0);
+    class_addmethod(c, (method)graf_write,       "write",       A_SYM,   0);
+    class_addmethod(c, (method)graf_read,        "read",        A_SYM,   0);
 
     class_register(CLASS_BOX, c);
     graf_class = c;
@@ -155,28 +164,16 @@ void ext_main(void *r)
 }
 
 
-////////////////////////// internal helper functions
-
-/**
- * Find a node by its symbol ID.
- * t_symbol pointer equality is valid in Max because gensym() interns all symbols —
- * the same string always returns the same pointer. Equivalent to .equals() in Java.
- * Returns NULL if not found (like hasVertice() returning false).
- */
-t_graf_node *graf_find_node(t_graf *x, t_symbol *id)
-{
-    long i;
-    for (i = 0; i < x->node_count; i++) {
-        if (x->nodes[i].id == id)
-            return &x->nodes[i];
-    }
-    return NULL;
-}
+////////////////////////// internal helpers — graph structure
 
 /**
  * Find a node's index in the nodes array.
  * Returns -1 if not found.
- * Used when we need to shift the array after removal.
+ * Used when we need to shift the array after removal (removenode).
+ *
+ * Note: graf_find_node() (returns pointer) is in graf.h as a static inline,
+ * shared with graf.traverse. This index variant is only needed internally
+ * in graf.c so it stays here.
  */
 long graf_find_node_index(t_graf *x, t_symbol *id)
 {
@@ -202,37 +199,383 @@ void graf_ensure_capacity(t_graf *x)
     }
 }
 
+/**
+ * Add a node without posting to the Max console.
+ * This is the core insertion logic shared by graf_addnode (interactive)
+ * and graf_load_from_buffer (bulk load from file).
+ *
+ * id            — interned symbol to use as the node identifier
+ * payload_count — number of Max atoms in the payload array (may be 0)
+ * payload       — pointer to payload atoms; copied into the node (may be NULL)
+ *
+ * Returns  0 on success
+ *         -1 if a node with this id already exists (warns via object_warn)
+ *
+ * Java analogy: like addVertice() in IGraph<V>, but with payload support.
+ */
+static int graf_addnode_quiet(t_graf *x, t_symbol *id,
+                              long payload_count, t_atom *payload)
+{
+    if (graf_find_node(x, id)) {
+        object_warn((t_object *)x,
+                    "addnode: node '%s' already exists", id->s_name);
+        return -1;
+    }
+
+    graf_ensure_capacity(x);
+
+    t_graf_node *n  = &x->nodes[x->node_count];
+    n->id           = id;
+    n->edge_count   = 0;
+    n->edges_to     = NULL;     /* allocated lazily on first addedge */
+    n->edge_weights = NULL;
+
+    if (payload_count > 0 && payload) {
+        n->payload_count = payload_count;
+        n->payload = (t_atom *)sysmem_newptr(payload_count * sizeof(t_atom));
+        sysmem_copyptr(payload, n->payload, payload_count * sizeof(t_atom));
+    } else {
+        n->payload       = NULL;
+        n->payload_count = 0;
+    }
+
+    x->node_count++;
+    return 0;
+}
+
+/**
+ * Add an edge without posting to the Max console.
+ * Core insertion logic shared by graf_addedge and graf_load_from_buffer.
+ *
+ * u, v   — interned symbols identifying source and target nodes
+ * weight — edge weight (0.0 = no preference; used by graf.traverse for
+ *          weighted random and Dijkstra)
+ *
+ * Returns  0 on success
+ *         -1 on error (node not found, or duplicate edge)
+ *
+ * Java analogy: like addEdge() in IGraph<V>, but directed and weighted.
+ */
+static int graf_addedge_quiet(t_graf *x, t_symbol *u,
+                              t_symbol *v, double weight)
+{
+    t_graf_node *src = graf_find_node(x, u);
+    t_graf_node *dst = graf_find_node(x, v);
+
+    if (!src) {
+        object_error((t_object *)x,
+                     "addedge: source '%s' not found", u->s_name);
+        return -1;
+    }
+    if (!dst) {
+        object_error((t_object *)x,
+                     "addedge: target '%s' not found", v->s_name);
+        return -1;
+    }
+
+    /* duplicate check */
+    long i;
+    for (i = 0; i < src->edge_count; i++) {
+        if (src->edges_to[i] == v) {
+            object_warn((t_object *)x,
+                        "addedge: edge '%s'->'%s' already exists",
+                        u->s_name, v->s_name);
+            return -1;
+        }
+    }
+
+    /* grow edge arrays: allocate on first edge, resize thereafter */
+    long new_count = src->edge_count + 1;
+    if (src->edges_to == NULL) {
+        src->edges_to     = (t_symbol **)sysmem_newptr(
+                             new_count * sizeof(t_symbol *));
+        src->edge_weights = (double *)   sysmem_newptr(
+                             new_count * sizeof(double));
+    } else {
+        src->edges_to     = (t_symbol **)sysmem_resizeptr(
+                             src->edges_to, new_count * sizeof(t_symbol *));
+        src->edge_weights = (double *)   sysmem_resizeptr(
+                             src->edge_weights, new_count * sizeof(double));
+    }
+
+    src->edges_to[src->edge_count]     = v;
+    src->edge_weights[src->edge_count] = weight;
+    src->edge_count++;
+    return 0;
+}
+
+
+////////////////////////// internal helpers — file I/O
+
+/**
+ * Write a null-terminated string to an open file handle.
+ * Thin wrapper around sysfile_write for line-at-a-time text output.
+ */
+static void graf_sysfile_write_str(t_filehandle fh, const char *str)
+{
+    t_ptr_size len = (t_ptr_size)strlen(str);
+    sysfile_write(fh, &len, (void *)str);
+}
+
+/**
+ * Render a single Max atom as a string suitable for CSV output.
+ *
+ *   A_LONG  → integer, e.g. "60"
+ *   A_FLOAT → decimal, e.g. "0.5" — %.10g preserves round-trip precision
+ *             without unnecessary trailing zeros
+ *   A_SYM   → raw symbol name, e.g. "foo"
+ *
+ * Limitation: symbol values containing commas or whitespace will break
+ * the CSV parser on read. Avoid commas and leading/trailing spaces in
+ * node IDs and symbol payloads.
+ */
+static void graf_atom_to_str(const t_atom *a, char *buf, long maxlen)
+{
+    switch (atom_gettype(a)) {
+        case A_LONG:
+            snprintf(buf, maxlen, "%ld", (long)atom_getlong(a));
+            break;
+        case A_FLOAT:
+            snprintf(buf, maxlen, "%.10g", (double)atom_getfloat(a));
+            break;
+        case A_SYM:
+            snprintf(buf, maxlen, "%s", atom_getsym(a)->s_name);
+            break;
+        default:
+            snprintf(buf, maxlen, "0");
+            break;
+    }
+}
+
+/**
+ * Split a single CSV line into whitespace-trimmed tokens.
+ *
+ * Lines starting with '#' (optionally preceded by whitespace) are comments:
+ * returns 0 immediately. Empty lines also return 0.
+ *
+ * tokens      — output array; each entry is a null-terminated string
+ * max_tokens  — capacity of the tokens array
+ * returns     — number of tokens found (0 for blank/comment lines)
+ *
+ * Java analogy: like line.split(",") followed by .strip() on each element,
+ * but without allocations (operates in place on the caller's buffer).
+ */
+static long graf_csv_tokenize(char *line,
+                              char tokens[][GRAF_CSV_TOKEN_LEN],
+                              long max_tokens)
+{
+    long  count = 0;
+    char *p     = line;
+
+    /* skip leading whitespace */
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* comment or empty line — caller should skip */
+    if (!*p || *p == '#') return 0;
+
+    while (*p && count < max_tokens) {
+        /* skip whitespace before this token */
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        /* scan to comma or end of string */
+        char *start = p;
+        while (*p && *p != ',') p++;
+        char *end = p;
+
+        /* trim trailing whitespace */
+        while (end > start && (*(end - 1) == ' ' || *(end - 1) == '\t'))
+            end--;
+
+        long len = (long)(end - start);
+        if (len <= 0) {
+            /* empty token between commas — skip */
+            if (*p == ',') p++;
+            continue;
+        }
+        if (len > GRAF_CSV_TOKEN_LEN - 1) len = GRAF_CSV_TOKEN_LEN - 1;
+        strncpy(tokens[count], start, len);
+        tokens[count][len] = '\0';
+        count++;
+
+        if (*p == ',') p++;  /* advance past comma */
+    }
+
+    return count;
+}
+
+/**
+ * Infer the Max atom type for a string token and set the atom accordingly.
+ *
+ * Priority:
+ *   1. Try integer (strtol) — succeeds when the entire string is consumed
+ *   2. Try float   (strtod) — succeeds when the entire string is consumed
+ *   3. Fall back to symbol
+ *
+ * Java analogy: trying Integer.parseInt, then Double.parseDouble, then
+ * treating the raw string as a Symbol object.
+ */
+static void graf_parse_atom_str(const char *str, t_atom *a)
+{
+    char *end;
+
+    long lval = strtol(str, &end, 10);
+    if (end != str && *end == '\0') {
+        atom_setlong(a, lval);
+        return;
+    }
+
+    double dval = strtod(str, &end);
+    if (end != str && *end == '\0') {
+        atom_setfloat(a, (float)dval);
+        return;
+    }
+
+    atom_setsym(a, gensym(str));
+}
+
+/**
+ * Write the entire graph to an already-open file handle.
+ * Called by graf_write after creating the file.
+ *
+ * Output order: header comments, then all nodes, then all edges.
+ * Edge weights are always written explicitly (even 0.0) so that a
+ * round-trip read restores the full weight information exactly.
+ */
+static void graf_write_to_handle(t_graf *x, t_filehandle fh)
+{
+    char line[GRAF_CSV_LINE_LEN];
+    long i, j;
+
+    graf_sysfile_write_str(fh, "# graf CSV — graph data file\n");
+    graf_sysfile_write_str(fh, "# nodes: n, id [, payload...]\n");
+    graf_sysfile_write_str(fh, "# edges: e, from, to [, weight]\n");
+
+    /* nodes */
+    for (i = 0; i < x->node_count; i++) {
+        t_graf_node *n = &x->nodes[i];
+        snprintf(line, sizeof(line), "n, %s", n->id->s_name);
+
+        for (j = 0; j < n->payload_count; j++) {
+            char val[64];
+            graf_atom_to_str(&n->payload[j], val, sizeof(val));
+            strncat(line, ", ",  sizeof(line) - strlen(line) - 1);
+            strncat(line, val,   sizeof(line) - strlen(line) - 1);
+        }
+        strncat(line, "\n", sizeof(line) - strlen(line) - 1);
+        graf_sysfile_write_str(fh, line);
+    }
+
+    /* edges */
+    for (i = 0; i < x->node_count; i++) {
+        t_graf_node *n = &x->nodes[i];
+        for (j = 0; j < n->edge_count; j++) {
+            snprintf(line, sizeof(line), "e, %s, %s, %.10g\n",
+                     n->id->s_name,
+                     n->edges_to[j]->s_name,
+                     n->edge_weights[j]);
+            graf_sysfile_write_str(fh, line);
+        }
+    }
+}
+
+/**
+ * Parse a text buffer of CSV content and populate the graph.
+ * Called by graf_read after reading the whole file into memory.
+ *
+ * The buffer is modified in place (newlines replaced with null bytes to
+ * null-terminate each line). The caller owns the buffer and frees it.
+ *
+ * Uses the quiet core operations to avoid flooding the Max console
+ * with per-node/per-edge messages during bulk load. graf_read posts
+ * a single summary line after this function returns.
+ */
+static void graf_load_from_buffer(t_graf *x, char *buf, t_ptr_size count)
+{
+    char  tokens[GRAF_CSV_MAX_TOKENS][GRAF_CSV_TOKEN_LEN];
+    char *p   = buf;
+    char *end = buf + count;
+
+    while (p < end && *p) {
+        /* locate end of this line */
+        char *line_end = p;
+        while (line_end < end && *line_end != '\n' && *line_end != '\r')
+            line_end++;
+
+        /* null-terminate the line in the buffer */
+        if (line_end < end) *line_end = '\0';
+
+        /* skip past the newline (handle \r\n and \n\r) */
+        char *next_line = line_end + 1;
+        if (next_line < end && (*next_line == '\r' || *next_line == '\n'))
+            next_line++;
+
+        long ntokens = graf_csv_tokenize(p, tokens, GRAF_CSV_MAX_TOKENS);
+
+        if (ntokens >= 2 && strcmp(tokens[0], "n") == 0) {
+            /*
+             * Node line: n, id [, payload...]
+             *
+             * Reconstruct a payload atom array from tokens[2..ntokens-1].
+             * tokens[1] is the node id.
+             *
+             * Example:  n, a, 60, 0.5, 127
+             *   tokens: [n] [a] [60] [0.5] [127]   ntokens=5
+             *   payload: atoms [60, 0.5, 127]       payload_count=3
+             */
+            t_atom payload[GRAF_CSV_MAX_TOKENS];
+            long k;
+            long payload_count = ntokens - 2;
+            for (k = 0; k < payload_count; k++)
+                graf_parse_atom_str(tokens[k + 2], &payload[k]);
+
+            graf_addnode_quiet(x, gensym(tokens[1]),
+                               payload_count,
+                               payload_count > 0 ? payload : NULL);
+
+        } else if (ntokens >= 3 && strcmp(tokens[0], "e") == 0) {
+            /*
+             * Edge line: e, from, to [, weight]
+             *
+             * Weight is optional in the file; defaults to 0.0 if absent.
+             */
+            double weight = (ntokens >= 4) ? strtod(tokens[3], NULL) : 0.0;
+            graf_addedge_quiet(x,
+                               gensym(tokens[1]),
+                               gensym(tokens[2]),
+                               weight);
+        }
+
+        p = next_line;
+    }
+}
+
 
 ////////////////////////// object lifecycle
 
 /**
- * Constructor — called when the user creates a [graf] or [graf my_name] object.
+ * Constructor — called when the user creates [graf] or [graf my_name].
  *
- * If a name argument is given, the instance is registered under that name
- * so other objects can find it via object_findregistered().
- * If no name is given, an auto-name like "graf_0", "graf_1" is assigned.
+ * Named instances register themselves via object_register() so that
+ * graf.traverse (and future family members) can locate them by name
+ * using object_findregistered(). This mirrors the dict~ / buffer~ pattern.
  */
 void *graf_new(t_symbol *s, long argc, t_atom *argv)
 {
     t_graf *x = (t_graf *)object_alloc(graf_class);
     if (!x) return NULL;
 
-    // determine instance name
     if (argc > 0 && atom_gettype(argv) == A_SYM) {
-        // user provided a name: [graf my_graph]
         x->name = atom_getsym(argv);
     } else {
-        // auto-generate a name: graf_0, graf_1, ...
         char auto_name[64];
         snprintf(auto_name, sizeof(auto_name), "%s%ld",
                  GRAF_AUTO_NAME_PREFIX, graf_instance_count++);
         x->name = gensym(auto_name);
     }
 
-    // register this instance so other objects can find it by name
     object_register(CLASS_BOX, x->name, x);
 
-    // initialize node storage
     x->node_count    = 0;
     x->node_capacity = GRAF_INIT_CAPACITY;
     x->next_node_id  = 0;
@@ -240,7 +583,6 @@ void *graf_new(t_symbol *s, long argc, t_atom *argv)
                         x->node_capacity * sizeof(t_graf_node));
     x->current       = NULL;
 
-    // single outlet: outputs node id + payload on bang, query results otherwise
     x->outlet = outlet_new(x, NULL);
 
     post("graf: created instance '%s'", x->name->s_name);
@@ -249,17 +591,15 @@ void *graf_new(t_symbol *s, long argc, t_atom *argv)
 
 /**
  * Destructor — free all dynamically allocated memory.
- * Each node owns its payload and edge arrays, so we free those first,
- * then free the nodes array itself.
+ * Each node owns its payload and edge arrays, so those are freed first,
+ * then the nodes array itself.
  */
 void graf_free(t_graf *x)
 {
     long i;
 
-    // unregister from the named object registry
     object_unregister(x);
 
-    // free each node's internal arrays
     for (i = 0; i < x->node_count; i++) {
         t_graf_node *n = &x->nodes[i];
         if (n->payload)      sysmem_freeptr(n->payload);
@@ -267,87 +607,80 @@ void graf_free(t_graf *x)
         if (n->edge_weights) sysmem_freeptr(n->edge_weights);
     }
 
-    // free the nodes array itself
     if (x->nodes) sysmem_freeptr(x->nodes);
 }
 
 void graf_assist(t_graf *x, void *b, long m, long a, char *s)
 {
     if (m == ASSIST_INLET)
-        sprintf(s, "addnode, removenode, addedge, removeedge, goto, next, hasnode, neighbours, adjacent, size, print, bang");
+        sprintf(s,
+            "addnode / addedge / goto / next / bang / "
+            "clear / read / write / hasnode / ...");
     else
         sprintf(s, "node output: id + payload");
 }
 
 
-////////////////////////// message handlers and operations
+////////////////////////// message handlers
+
+/**
+ * bang — output current node id + payload to the outlet.
+ *
+ * Output format: node id is the message selector; payload atoms follow.
+ * Example (node foo with payload [60, 0.5]): outlet sends "foo 60 0.5"
+ * which downstream [route] or [unpack] objects can handle.
+ */
+void graf_bang(t_graf *x)
+{
+    if (!x->current) {
+        object_error((t_object *)x,
+                     "bang: no current node — use 'goto' first");
+        return;
+    }
+    t_graf_node *n = graf_find_node(x, x->current);
+    if (!n) return;
+
+    outlet_anything(x->outlet, n->id,
+                    n->payload_count,
+                    n->payload_count > 0 ? n->payload : NULL);
+}
 
 /**
  * addnode [id] [payload...]
  *
- * Add a node to the graph.
- * - If no id is given, auto-assigns "node0", "node1", etc.
- * - If an id is given as first argument, uses that.
- * - Any additional arguments become the node's payload (any Max atoms).
+ * Add a node. ID auto-increments if omitted. Any additional arguments
+ * become the node's payload (ints, floats, or symbols — any Max atoms).
  *
  * Examples:
- *   addnode              -> node0 (no payload)
- *   addnode foo          -> foo (no payload)
- *   addnode foo 60 0.5   -> foo with payload [60, 0.5]
+ *   addnode              → node0 (no payload)
+ *   addnode foo          → foo (no payload)
+ *   addnode foo 60 0.5   → foo with payload [60, 0.5]
  */
 void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
     t_symbol *id;
 
     if (argc < 1) {
-        // no arguments: auto-generate id
         char auto_id[64];
         snprintf(auto_id, sizeof(auto_id), "%s%ld",
                  GRAF_AUTO_NODE_PREFIX, x->next_node_id++);
         id = gensym(auto_id);
     } else {
-        // first argument is the node id
         if (atom_gettype(argv) == A_SYM) {
             id = atom_getsym(argv);
         } else {
-            // numeric id: convert to symbol so pointer equality still works
+            /* numeric id: convert to symbol so pointer equality still works */
             char id_str[64];
             snprintf(id_str, sizeof(id_str), "%ld", atom_getlong(argv));
             id = gensym(id_str);
         }
     }
 
-    // check for duplicates (like hasVertice() in Java)
-    if (graf_find_node(x, id)) {
-        object_warn((t_object *)x, "addnode: node '%s' already exists", id->s_name);
-        return;
-    }
+    long payload_count = (argc > 1) ? argc - 1 : 0;
+    t_atom *payload    = (payload_count > 0) ? argv + 1 : NULL;
 
-    graf_ensure_capacity(x);
-
-    // initialize the new node at the end of the array
-    t_graf_node *n  = &x->nodes[x->node_count];
-    n->id           = id;
-    n->edge_count   = 0;
-    n->edges_to     = NULL;     // allocated lazily when first edge is added
-    n->edge_weights = NULL;
-
-    // store payload: all atoms after the id argument
-    long payload_start = (argc < 1) ? 0 : 1;
-    long payload_count = argc - payload_start;
-
-    if (payload_count > 0) {
-        n->payload_count = payload_count;
-        n->payload = (t_atom *)sysmem_newptr(payload_count * sizeof(t_atom));
-        sysmem_copyptr(argv + payload_start, n->payload,
-                       payload_count * sizeof(t_atom));
-    } else {
-        n->payload       = NULL;
-        n->payload_count = 0;
-    }
-
-    x->node_count++;
-    post("graf: added node '%s'", id->s_name);
+    if (graf_addnode_quiet(x, id, payload_count, payload) == 0)
+        post("graf: added node '%s'", id->s_name);
 }
 
 /**
@@ -363,42 +696,40 @@ void graf_removenode(t_graf *x, t_symbol *id)
 {
     long idx = graf_find_node_index(x, id);
     if (idx < 0) {
-        object_error((t_object *)x, "removenode: node '%s' not found", id->s_name);
+        object_error((t_object *)x,
+                     "removenode: node '%s' not found", id->s_name);
         return;
     }
 
-    // free node's own memory
     t_graf_node *n = &x->nodes[idx];
     if (n->payload)      sysmem_freeptr(n->payload);
     if (n->edges_to)     sysmem_freeptr(n->edges_to);
     if (n->edge_weights) sysmem_freeptr(n->edge_weights);
 
-    // scan all other nodes and remove any edges pointing to the deleted node
+    /* remove any inbound edges from other nodes */
     long i, j;
     for (i = 0; i < x->node_count; i++) {
         if (i == idx) continue;
         t_graf_node *other = &x->nodes[i];
         for (j = 0; j < other->edge_count; j++) {
             if (other->edges_to[j] == id) {
-                // shift remaining edges left to fill the gap
                 long k;
                 for (k = j; k < other->edge_count - 1; k++) {
                     other->edges_to[k]     = other->edges_to[k + 1];
                     other->edge_weights[k] = other->edge_weights[k + 1];
                 }
                 other->edge_count--;
-                j--; // re-check this index after shift
+                j--;  /* re-check index after shift */
             }
         }
     }
 
-    // shift the nodes array to fill the removed slot
+    /* shift nodes array to fill the gap */
     long shift;
     for (shift = idx; shift < x->node_count - 1; shift++)
         x->nodes[shift] = x->nodes[shift + 1];
     x->node_count--;
 
-    // clear current pointer if it was this node
     if (x->current == id) x->current = NULL;
 
     post("graf: removed node '%s'", id->s_name);
@@ -407,19 +738,14 @@ void graf_removenode(t_graf *x, t_symbol *id)
 /**
  * addedge <u> <v> [weight]
  *
- * Add a directed edge from node u to node v with an optional weight.
- * Default weight is 0.0 (no cost to traverse).
- * Both nodes must already exist.
- * Duplicate edges are rejected.
- *
- * Examples:
- *   addedge a b        -> a->b weight 0.0
- *   addedge a b 0.5    -> a->b weight 0.5
+ * Add a directed edge u→v. Weight defaults to 0.0.
+ * Both nodes must already exist. Duplicate edges are rejected.
  */
 void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
     if (argc < 2) {
-        object_error((t_object *)x, "addedge: requires source and target node ids");
+        object_error((t_object *)x,
+                     "addedge: requires source and target node ids");
         return;
     }
 
@@ -427,51 +753,21 @@ void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
     t_symbol *v      = atom_getsym(argv + 1);
     double    weight = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
 
-    t_graf_node *src = graf_find_node(x, u);
-    t_graf_node *dst = graf_find_node(x, v);
-
-    if (!src) { object_error((t_object *)x, "addedge: source '%s' not found", u->s_name); return; }
-    if (!dst) { object_error((t_object *)x, "addedge: target '%s' not found", v->s_name); return; }
-
-    // check for duplicate edge
-    long i;
-    for (i = 0; i < src->edge_count; i++) {
-        if (src->edges_to[i] == v) {
-            object_warn((t_object *)x, "addedge: edge '%s'->'%s' already exists",
-                        u->s_name, v->s_name);
-            return;
-        }
-    }
-
-    // grow edge arrays — allocate on first edge, resize on subsequent ones
-    long new_count = src->edge_count + 1;
-    if (src->edges_to == NULL) {
-        src->edges_to     = (t_symbol **)sysmem_newptr(new_count * sizeof(t_symbol *));
-        src->edge_weights = (double *)   sysmem_newptr(new_count * sizeof(double));
-    } else {
-        src->edges_to     = (t_symbol **)sysmem_resizeptr(src->edges_to,
-                             new_count * sizeof(t_symbol *));
-        src->edge_weights = (double *)   sysmem_resizeptr(src->edge_weights,
-                             new_count * sizeof(double));
-    }
-
-    src->edges_to[src->edge_count]     = v;
-    src->edge_weights[src->edge_count] = weight;
-    src->edge_count++;
-
-    post("graf: added edge '%s' -> '%s' (weight: %.2f)", u->s_name, v->s_name, weight);
+    if (graf_addedge_quiet(x, u, v, weight) == 0)
+        post("graf: added edge '%s' -> '%s' (weight: %.2f)",
+             u->s_name, v->s_name, weight);
 }
 
 /**
  * removeedge <u> <v>
  *
- * Remove the directed edge from u to v.
- * Note: this only removes u->v, not v->u (directed graph).
+ * Remove the directed edge u→v only (not v→u).
  */
 void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
     if (argc < 2) {
-        object_error((t_object *)x, "removeedge: requires source and target node ids");
+        object_error((t_object *)x,
+                     "removeedge: requires source and target node ids");
         return;
     }
 
@@ -480,14 +776,14 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 
     t_graf_node *src = graf_find_node(x, u);
     if (!src) {
-        object_error((t_object *)x, "removeedge: source '%s' not found", u->s_name);
+        object_error((t_object *)x,
+                     "removeedge: source '%s' not found", u->s_name);
         return;
     }
 
     long i;
     for (i = 0; i < src->edge_count; i++) {
         if (src->edges_to[i] == v) {
-            // shift remaining edges left
             long k;
             for (k = i; k < src->edge_count - 1; k++) {
                 src->edges_to[k]     = src->edges_to[k + 1];
@@ -498,7 +794,8 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
             return;
         }
     }
-    object_error((t_object *)x, "removeedge: edge '%s'->'%s' not found",
+    object_error((t_object *)x,
+                 "removeedge: edge '%s'->'%s' not found",
                  u->s_name, v->s_name);
 }
 
@@ -506,9 +803,8 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  * goto <id>
  *
  * Set the current traversal position to the specified node.
- * This is a direct jump — edges are ignored, any node can be reached.
- * Think of it as the composer manually placing the playhead.
- * After this, bang will output that node's id and payload.
+ * Direct jump — edges are ignored, any node can be reached.
+ * After this, bang outputs that node's id and payload.
  */
 void graf_goto(t_graf *x, t_symbol *id)
 {
@@ -523,22 +819,15 @@ void graf_goto(t_graf *x, t_symbol *id)
 /**
  * next
  *
- * Move to a random neighbour of the current node following a directed edge.
- * This is the simplest form of autonomous traversal — uniform random choice
- * among all outgoing edges, ignoring weights.
- *
- * After moving, outputs the new current node's id and payload (like bang).
- *
- * Errors if:
- *   - no current node is set (use goto first)
- *   - current node has no outgoing edges (dead end)
- *
- * Note: weight-aware traversal will be handled by graf.traverse later.
+ * Move to a uniform-random outgoing neighbour, output the new node.
+ * This is the only traversal built into graf — intentionally simple.
+ * Weight-aware traversal (Markov chain, DFS, BFS) lives in graf.traverse.
  */
 void graf_next(t_graf *x)
 {
     if (!x->current) {
-        object_error((t_object *)x, "next: no current node — use 'goto' first");
+        object_error((t_object *)x,
+                     "next: no current node — use 'goto' first");
         return;
     }
 
@@ -546,17 +835,15 @@ void graf_next(t_graf *x)
     if (!n) return;
 
     if (n->edge_count == 0) {
-        object_error((t_object *)x, "next: node '%s' has no outgoing edges (dead end)",
+        object_error((t_object *)x,
+                     "next: node '%s' has no outgoing edges (dead end)",
                      x->current->s_name);
         return;
     }
 
-    // uniform random choice among outgoing edges
-    // rand() % n gives a value in [0, n-1]
-    long chosen = (long)(rand() % n->edge_count);
-    x->current = n->edges_to[chosen];
+    long chosen    = (long)(rand() % n->edge_count);
+    x->current     = n->edges_to[chosen];
 
-    // output the new current node immediately (like bang)
     t_graf_node *next_node = graf_find_node(x, x->current);
     if (!next_node) return;
 
@@ -568,7 +855,7 @@ void graf_next(t_graf *x)
 /**
  * hasnode <id>
  *
- * Output 1 if a node with the given id exists, 0 otherwise.
+ * Output "hasnode 1" or "hasnode 0".
  * Equivalent to IGraph.hasVertice() in Java.
  */
 void graf_hasnode(t_graf *x, t_symbol *id)
@@ -579,43 +866,17 @@ void graf_hasnode(t_graf *x, t_symbol *id)
 }
 
 /**
- * bang
- *
- * Output the current node's id and payload to the outlet.
- * Output format: the node id is the message selector,
- * and the payload atoms follow as arguments.
- *
- * Example outputs:
- *   node has no payload        -> symbol "foo" with no args
- *   node has payload 60 0.5    -> symbol "foo" with args [60, 0.5]
- */
-void graf_bang(t_graf *x)
-{
-    if (!x->current) {
-        object_error((t_object *)x, "bang: no current node — use 'goto' first");
-        return;
-    }
-
-    t_graf_node *n = graf_find_node(x, x->current);
-    if (!n) return;
-
-    outlet_anything(x->outlet, n->id,
-                    n->payload_count,
-                    n->payload_count > 0 ? n->payload : NULL);
-}
-
-/**
  * neighbours <id>
  *
- * Output each direct neighbour of the given node as a separate message.
- * Each output is: "neighbour <node_id>"
+ * Output each outgoing neighbour as a separate "neighbour <id>" message.
  * Equivalent to IGraph.neighbours() in Java.
  */
 void graf_neighbours(t_graf *x, t_symbol *id)
 {
     t_graf_node *n = graf_find_node(x, id);
     if (!n) {
-        object_error((t_object *)x, "neighbours: node '%s' not found", id->s_name);
+        object_error((t_object *)x,
+                     "neighbours: node '%s' not found", id->s_name);
         return;
     }
 
@@ -624,7 +885,7 @@ void graf_neighbours(t_graf *x, t_symbol *id)
         return;
     }
 
-    long i;
+    long   i;
     t_atom a;
     for (i = 0; i < n->edge_count; i++) {
         atom_setsym(&a, n->edges_to[i]);
@@ -635,9 +896,8 @@ void graf_neighbours(t_graf *x, t_symbol *id)
 /**
  * adjacent <u> <v>
  *
- * Output 1 if there is a directed edge u->v, 0 otherwise.
+ * Output "adjacent 1" if directed edge u→v exists, "adjacent 0" otherwise.
  * Equivalent to IGraph.adjacent() in Java.
- * Note: only checks u->v, not v->u (directed graph).
  */
 void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -651,7 +911,8 @@ void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 
     t_graf_node *src = graf_find_node(x, u);
     if (!src) {
-        object_error((t_object *)x, "adjacent: node '%s' not found", u->s_name);
+        object_error((t_object *)x,
+                     "adjacent: node '%s' not found", u->s_name);
         return;
     }
 
@@ -669,9 +930,7 @@ void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 }
 
 /**
- * size
- *
- * Output the number of nodes currently in the graph.
+ * size — output "size <n>".
  * Equivalent to IGraph.size() in Java.
  */
 void graf_size(t_graf *x)
@@ -682,21 +941,17 @@ void graf_size(t_graf *x)
 }
 
 /**
- * print
- *
- * Dump the entire graph structure to the Max console.
- * For each node: shows its id and all outgoing edges with weights.
- * Also shows the current traversal position.
+ * print — dump entire graph structure to the Max console.
  */
 void graf_print(t_graf *x)
 {
     long i, j;
-    post("graf '%s': --- graph (%ld nodes) ---", x->name->s_name, x->node_count);
+    post("graf '%s': --- graph (%ld nodes) ---",
+         x->name->s_name, x->node_count);
 
     for (i = 0; i < x->node_count; i++) {
         t_graf_node *n = &x->nodes[i];
 
-        // build edge list string
         char edge_str[512] = "";
         for (j = 0; j < n->edge_count; j++) {
             char tmp[64];
@@ -712,4 +967,146 @@ void graf_print(t_graf *x)
 
     post("  current: %s",
          x->current ? x->current->s_name : "(none)");
+}
+
+
+////////////////////////// clear, write, read
+
+/**
+ * clear
+ *
+ * Remove all nodes and edges. Reset the graph to an empty state.
+ *
+ * The pre-allocated nodes array is kept at its current capacity — no
+ * reallocation. next_node_id resets to 0 so auto-named nodes restart
+ * from "node0". current is cleared.
+ *
+ * Java analogy: like calling clear() on an ArrayList — the backing array
+ * stays allocated, but length resets to 0 and the old elements are released.
+ */
+void graf_clear(t_graf *x)
+{
+    long i;
+    for (i = 0; i < x->node_count; i++) {
+        t_graf_node *n = &x->nodes[i];
+        if (n->payload)      sysmem_freeptr(n->payload);
+        if (n->edges_to)     sysmem_freeptr(n->edges_to);
+        if (n->edge_weights) sysmem_freeptr(n->edge_weights);
+    }
+    x->node_count   = 0;
+    x->current      = NULL;
+    x->next_node_id = 0;
+    post("graf '%s': cleared", x->name->s_name);
+}
+
+/**
+ * write <filename>
+ *
+ * Serialize the entire graph to a CSV file.
+ *
+ * filename can be a full POSIX path (/Users/me/graph.csv) or a bare
+ * filename (my_graph.csv). A bare filename is written to Max's default
+ * path, typically the current patcher's folder.
+ *
+ * Uses Max's sysfile API rather than stdio — required for correct
+ * operation in Max's sandboxed environment and consistent with how
+ * buffer~ and dict write their files.
+ *
+ * path_frompathname splits a full POSIX path into a Max volume short
+ * and a bare filename. If it fails (bare filename given), we fall back
+ * to path_getdefault() which returns the patcher folder.
+ * path_createsysfile creates or overwrites the file (type 0 = generic).
+ */
+void graf_write(t_graf *x, t_symbol *filename)
+{
+    short        path;
+    char         name[MAX_PATH_CHARS];
+    t_filehandle fh;
+
+    if (path_frompathname(filename->s_name, &path, name) != 0) {
+        path = path_getdefault();
+        strncpy(name, filename->s_name, MAX_PATH_CHARS);
+        name[MAX_PATH_CHARS - 1] = '\0';
+    }
+
+    if (path_createsysfile(name, path, 0, &fh) != 0) {
+        object_error((t_object *)x,
+                     "write: could not create file '%s'", filename->s_name);
+        return;
+    }
+
+    graf_write_to_handle(x, fh);
+    sysfile_close(fh);
+    post("graf '%s': written to '%s' (%ld nodes)",
+         x->name->s_name, filename->s_name, x->node_count);
+}
+
+/**
+ * read <filename>
+ *
+ * Load a graph from a CSV file, replacing the current contents.
+ * Calls clear first, then parses the file.
+ *
+ * filename can be a full POSIX path or a bare filename. A bare filename
+ * is searched on Max's file search path (patcher folder first, then
+ * the Max search path) via locatefile_extended.
+ *
+ * Strategy:
+ *   1. path_frompathname  — succeeds for full POSIX paths
+ *   2. locatefile_extended — fallback, searches Max path for bare names
+ *   3. Read entire file into a heap buffer (sysfile_geteof + sysfile_read)
+ *   4. Close file handle, clear graph, parse buffer, free buffer
+ *
+ * Reading into memory first (vs. line-by-line) simplifies the code and
+ * is safe for the graph sizes expected in compositional use (< a few MB).
+ */
+void graf_read(t_graf *x, t_symbol *filename)
+{
+    short        path;
+    char         name[MAX_PATH_CHARS];
+    t_filehandle fh;
+    t_fourcc     type = 0;
+
+    strncpy(name, filename->s_name, MAX_PATH_CHARS);
+    name[MAX_PATH_CHARS - 1] = '\0';
+
+    if (path_frompathname(filename->s_name, &path, name) != 0) {
+        /* bare filename: search Max's file path */
+        strncpy(name, filename->s_name, MAX_PATH_CHARS);
+        if (locatefile_extended(name, &path, &type, NULL, 0) != 0) {
+            object_error((t_object *)x,
+                         "read: file '%s' not found", filename->s_name);
+            return;
+        }
+    }
+
+    if (path_opensysfile(name, path, &fh, READ_PERM) != 0) {
+        object_error((t_object *)x,
+                     "read: cannot open '%s'", filename->s_name);
+        return;
+    }
+
+    /* read entire file into a heap buffer */
+    t_ptr_size filesize;
+    sysfile_geteof(fh, &filesize);
+
+    char *buf = (char *)sysmem_newptr(filesize + 1);
+    if (!buf) {
+        object_error((t_object *)x, "read: out of memory");
+        sysfile_close(fh);
+        return;
+    }
+
+    t_ptr_size count = filesize;
+    sysfile_read(fh, &count, buf);
+    buf[count] = '\0';
+    sysfile_close(fh);
+
+    /* clear existing graph, parse buffer, free buffer */
+    graf_clear(x);
+    graf_load_from_buffer(x, buf, count);
+    sysmem_freeptr(buf);
+
+    post("graf '%s': loaded '%s' — %ld nodes",
+         x->name->s_name, filename->s_name, x->node_count);
 }

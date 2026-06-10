@@ -1,97 +1,73 @@
 /**
- * graf.h — Shared type definitions for the graf external family.
+ * @file graf.h
+ * Shared header for the graf external family.
  *
- * Include this header in any external that needs direct read access to
- * graf internals: graf.traverse, graf.visualizer, etc.
+ * Include this in every graf.* external. Defines the canonical data structures
+ * and provides two static inline lookup helpers that are compiled once per
+ * translation unit (avoiding linker collisions across externals).
  *
- * THIS IS THE CANONICAL DEFINITION of t_graf_node and t_graf.
- * Remove those struct definitions from graf.c and include this instead.
- *
- * If you change these structs, rebuild all externals in the family.
- *
- * C/Java note: there is no true header/interface system in C. This header
- * is the closest equivalent to a Java interface that both graf.c and
- * graf.traverse.c "implement" — except here we're sharing data layout
- * rather than method signatures.
+ * Java analogy: this is like a shared interface/model package that both the
+ * data-store class (graf) and its view class (graf.affiche) import.
  */
 
-#ifndef GRAF_H
-#define GRAF_H
+#pragma once
 
 #include "ext.h"
 #include "ext_obex.h"
 
-//////////////////////////////////////////////////////////////////////////
-// t_graf_node — one node in the directed graph
+
+////////////////////////// data structures
 
 /**
- * Represents a single node.
+ * A single node in the graph.
  *
- * Java equivalent: one entry V in AdjacencySet's vertices Set, plus
- * its row in the adjacencyList Map — but here directed and weighted.
+ * Equivalent to a vertex V in IGraph<V>.
+ * Outgoing edges are stored as parallel arrays (edges_to[i] / edge_weights[i]),
+ * allocated lazily — both are NULL until the first edge is added.
  *
- * Memory: edges_to and edge_weights are parallel dynamic arrays
- * (like two ArrayLists kept in sync). Allocated lazily on first edge.
- * payload is a dynamic t_atom array (Max's variant type).
+ * t_symbol* pointer equality is valid for ID comparison because Max interns
+ * every symbol via gensym() — the same string always returns the same pointer.
+ * This is identical to Java's String.intern() / identity comparison on interned strings.
  */
 typedef struct _graf_node {
-    t_symbol   *id;             // node identifier — interned by Max, use pointer equality
-    t_atom     *payload;        // optional Max atoms attached to this node (may be NULL)
+    t_symbol   *id;             /* node identifier (interned symbol, pointer equality valid) */
+    t_atom     *payload;        /* optional Max atoms attached to this node (int/float/symbol) */
     long        payload_count;
-    t_symbol  **edges_to;       // dynamic array of outgoing edge target IDs (may be NULL)
-    double     *edge_weights;   // weight per edge, parallel to edges_to (default 0.0)
+    t_symbol  **edges_to;       /* dynamic array: target node IDs for outgoing edges */
+    double     *edge_weights;   /* parallel array: weight for each outgoing edge */
     long        edge_count;
 } t_graf_node;
 
-//////////////////////////////////////////////////////////////////////////
-// t_graf — the graph object itself
-
 /**
- * The Max object struct for [graf].
+ * The graf object itself.
  *
- * Java equivalent: AdjacencySet<V>, but directed, weighted, and
- * embedded in a Max object rather than a plain Java class.
- *
- * The t_object header MUST be first — Max uses it as a vtable /
- * object header, like how every Java class implicitly extends Object.
- *
- * nodes is a flat dynamic array of t_graf_node structs (not pointers),
- * like an ArrayList<Node> where Node is a value type (C struct by value).
- * Capacity doubles on overflow, same as Java's ArrayList growth strategy.
+ * Holds a dynamic array of nodes (doubles in capacity like Java ArrayList)
+ * and a current traversal position pointer.
+ * Registered by name in the Max object registry so other objects
+ * (graf.traverse, graf.affiche) can find it via object_findregistered().
  */
 typedef struct _graf {
-    t_object    ob;             // MUST be first — Max object header
-    void       *outlet;         // single outlet: node id + payload on bang/next
-    t_symbol   *name;           // registered name for object_findregistered lookup
-    t_graf_node *nodes;         // dynamic flat array of nodes
-    long        node_count;     // number of nodes currently in use
-    long        node_capacity;  // total allocated slots in nodes array
-    long        next_node_id;   // auto-increment counter for anonymous node IDs
-    t_symbol   *current;        // current traversal position (NULL if unset)
+    t_object    ob;
+    void       *outlet;
+    t_symbol   *name;           /* registered instance name */
+    t_graf_node *nodes;         /* dynamic array (capacity doubles on overflow) */
+    long        node_count;
+    long        node_capacity;
+    long        next_node_id;   /* auto-increment counter for anonymous node IDs */
+    t_symbol   *current;        /* current traversal position (NULL if unset) */
 } t_graf;
 
-//////////////////////////////////////////////////////////////////////////
-// Shared inline helpers
-//
-// These are static inline — each translation unit that includes this
-// header gets its own copy of the compiled function. In Java terms,
-// think of these as static utility methods on a helper class, inlined
-// by the JIT. The 'static' keyword here means "local to this translation
-// unit" (not global), preventing linker errors from duplicate symbols.
+
+////////////////////////// inline lookup helpers
 
 /**
- * graf_find — look up a named graf instance from any external.
+ * Find a named graf instance in the Max object registry.
  *
- * Uses Max's object registration system. [graf name] calls
- * object_register(CLASS_BOX, name, self) on creation and
- * object_unregister(self) on deletion.
+ * Uses the same CLASS_BOX namespace that [graf my_graph] registers under.
+ * Returns NULL if no instance with that name exists yet.
  *
- * Java equivalent: a named object registry lookup, like
- *   registry.get("my_graph")
- * but typed as t_graf* via an explicit cast (Max's registry is untyped).
- *
- * @param name  The symbol name registered by [graf name]
- * @return      Pointer to the t_graf, or NULL if not found
+ * Java analogy: like a service locator / registry lookup —
+ *   GrafRegistry.find("my_graph")
  */
 static inline t_graf *graf_find(t_symbol *name)
 {
@@ -99,26 +75,20 @@ static inline t_graf *graf_find(t_symbol *name)
 }
 
 /**
- * graf_find_node — find a node in a graf by its ID symbol. O(n) scan.
+ * Linear scan for a node by symbol ID within a graf instance.
  *
- * Safe for sequencer-scale graphs (typically < 100 nodes).
- * t_symbol* pointer equality is valid: Max interns all symbols via
- * gensym() so the same string always maps to the same pointer address —
- * like Java's String.intern(), except it's guaranteed for all t_symbol*.
+ * Returns a pointer into x->nodes[], or NULL if not found.
+ * O(n) — acceptable for sequencer-scale graphs (< ~100 nodes).
  *
- * Java equivalent: adjacencyList.get(id) in AdjacencySet.
- *
- * @param g   The graf instance to search
- * @param id  The node's symbol ID
- * @return    Pointer to the t_graf_node in place (NOT a copy), or NULL
+ * Java analogy: like ArrayList<Node>.stream().filter(n -> n.id == id).findFirst()
+ * but using pointer equality instead of .equals() because Max interns symbols.
  */
-static inline t_graf_node *graf_find_node(t_graf *g, t_symbol *id)
+static inline t_graf_node *graf_find_node(t_graf *x, t_symbol *id)
 {
-    for (long i = 0; i < g->node_count; i++) {
-        if (g->nodes[i].id == id)   // pointer equality — valid for t_symbol*
-            return &g->nodes[i];
+    long i;
+    for (i = 0; i < x->node_count; i++) {
+        if (x->nodes[i].id == id)
+            return &x->nodes[i];
     }
     return NULL;
 }
-
-#endif /* GRAF_H */
