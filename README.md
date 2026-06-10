@@ -1,4 +1,4 @@
-# graf — Max/MSP External Family
+# graf library for Max
 
 Directed weighted graph data structure for use as a non-linear sequencer in Max/MSP.
 Written in C using the Cycling ’74 Max SDK.
