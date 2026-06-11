@@ -10,7 +10,7 @@
 		}
 ,
 		"classnamespace" : "box",
-		"rect" : [ 34.0, 128.0, 1444.0, 820.0 ],
+		"rect" : [ 34.0, 128.0, 1221.0, 820.0 ],
 		"bglocked" : 0,
 		"openinpresentation" : 0,
 		"default_fontsize" : 12.0,
@@ -40,13 +40,106 @@
 		"assistshowspatchername" : 0,
 		"boxes" : [ 			{
 				"box" : 				{
-					"id" : "obj-63",
-					"maxclass" : "button",
+					"id" : "obj-50",
+					"maxclass" : "message",
+					"numinlets" : 2,
+					"numoutlets" : 1,
+					"outlettype" : [ "" ],
+					"patching_rect" : [ 326.0, 431.0, 35.0, 22.0 ],
+					"text" : "clear"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-30",
+					"maxclass" : "message",
+					"numinlets" : 2,
+					"numoutlets" : 1,
+					"outlettype" : [ "" ],
+					"patching_rect" : [ 409.0, 345.0, 33.0, 22.0 ],
+					"text" : "read"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-25",
+					"maxclass" : "message",
+					"numinlets" : 2,
+					"numoutlets" : 1,
+					"outlettype" : [ "" ],
+					"patching_rect" : [ 493.0, 422.0, 34.0, 22.0 ],
+					"text" : "write"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-24",
+					"linecount" : 3,
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 709.0, 364.0, 237.0, 47.0 ],
+					"text" : "[graph.affiche] shows the selected graf. Use the message \"update\" followed by the desired graf name to display it."
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-7",
+					"maxclass" : "newobj",
 					"numinlets" : 1,
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
-					"parameter_enable" : 0,
-					"patching_rect" : [ 305.0, 412.0, 24.0, 24.0 ]
+					"patching_rect" : [ 601.0, 364.0, 58.0, 22.0 ],
+					"text" : "loadbang"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-33",
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 614.0, 151.0, 197.0, 20.0 ],
+					"text" : "(next) goes to the nearest neighbor"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-29",
+					"linecount" : 2,
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 75.0, 63.0, 450.0, 33.0 ],
+					"text" : "one [loadbang] object add vertices, such that myGraph = {a,b,c,d,e,f). Additionally we can manually add \"foo\" and \"bar\" as vertices."
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-22",
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 314.0, 151.0, 256.0, 20.0 ],
+					"text" : "(goto _) let the user change the current vertex"
+				}
+
+			}
+, 			{
+				"box" : 				{
+					"id" : "obj-12",
+					"maxclass" : "comment",
+					"numinlets" : 1,
+					"numoutlets" : 0,
+					"patching_rect" : [ 134.0, 100.0, 392.0, 20.0 ],
+					"text" : "the second [loadbang] creates eges between the objects in myGraph."
 				}
 
 			}
@@ -57,7 +150,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 880.0, 330.0, 98.0, 22.0 ],
+					"patching_rect" : [ 601.0, 393.0, 98.0, 22.0 ],
 					"text" : "update myGraph"
 				}
 
@@ -69,7 +162,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 813.0, 230.0, 95.0, 22.0 ],
+					"patching_rect" : [ 813.0, 275.0, 95.0, 22.0 ],
 					"text" : "addedge a e 0.1"
 				}
 
@@ -81,7 +174,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 726.0, 230.0, 85.0, 22.0 ],
+					"patching_rect" : [ 726.0, 275.0, 85.0, 22.0 ],
 					"text" : "addedge f a 1."
 				}
 
@@ -93,7 +186,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 639.0, 230.0, 85.0, 22.0 ],
+					"patching_rect" : [ 639.0, 275.0, 85.0, 22.0 ],
 					"text" : "addedge f e 1."
 				}
 
@@ -105,7 +198,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 552.0, 230.0, 85.0, 22.0 ],
+					"patching_rect" : [ 552.0, 275.0, 85.0, 22.0 ],
 					"text" : "addedge e f 1."
 				}
 
@@ -117,7 +210,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 568.0, 176.0, 76.0, 22.0 ],
+					"patching_rect" : [ 568.0, 236.0, 76.0, 22.0 ],
 					"text" : "addnode bar"
 				}
 
@@ -129,7 +222,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 486.0, 176.0, 75.0, 22.0 ],
+					"patching_rect" : [ 486.0, 236.0, 75.0, 22.0 ],
 					"text" : "addnode foo"
 				}
 
@@ -141,7 +234,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 409.0, 176.0, 62.0, 22.0 ],
+					"patching_rect" : [ 409.0, 236.0, 62.0, 22.0 ],
 					"text" : "addnode f"
 				}
 
@@ -153,7 +246,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 342.0, 176.0, 65.0, 22.0 ],
+					"patching_rect" : [ 342.0, 236.0, 65.0, 22.0 ],
 					"text" : "addnode e"
 				}
 
@@ -165,7 +258,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 275.0, 176.0, 65.0, 22.0 ],
+					"patching_rect" : [ 275.0, 236.0, 65.0, 22.0 ],
 					"text" : "addnode d"
 				}
 
@@ -176,7 +269,7 @@
 					"maxclass" : "graf.affiche",
 					"numinlets" : 1,
 					"numoutlets" : 0,
-					"patching_rect" : [ 601.0, 412.0, 400.0, 300.0 ]
+					"patching_rect" : [ 601.0, 427.0, 702.0, 338.0 ]
 				}
 
 			}
@@ -186,31 +279,8 @@
 					"maxclass" : "newobj",
 					"numinlets" : 1,
 					"numoutlets" : 0,
-					"patching_rect" : [ 82.0, 690.0, 32.0, 22.0 ],
+					"patching_rect" : [ 82.0, 735.0, 32.0, 22.0 ],
 					"text" : "print"
-				}
-
-			}
-, 			{
-				"box" : 				{
-					"id" : "obj-18",
-					"maxclass" : "comment",
-					"numinlets" : 1,
-					"numoutlets" : 0,
-					"patching_rect" : [ 287.5, 286.0, 150.0, 20.0 ],
-					"text" : "print current vertex"
-				}
-
-			}
-, 			{
-				"box" : 				{
-					"id" : "obj-7",
-					"linecount" : 3,
-					"maxclass" : "comment",
-					"numinlets" : 1,
-					"numoutlets" : 0,
-					"patching_rect" : [ 71.0, 31.0, 392.0, 47.0 ],
-					"text" : "a simple 3 nodes 6 edges graph is created:\\\nmyGrafVertices = {a,b,c}\\\nmyGrafEdges={<a,b,0.7>, <a,c,0.3>, <b,c,0.8>,<b,a,0.2>, <c,a,1.0>}"
 				}
 
 			}
@@ -220,7 +290,7 @@
 					"maxclass" : "newobj",
 					"numinlets" : 1,
 					"numoutlets" : 0,
-					"patching_rect" : [ 187.0, 645.0, 32.0, 22.0 ],
+					"patching_rect" : [ 187.0, 690.0, 32.0, 22.0 ],
 					"text" : "print"
 				}
 
@@ -233,7 +303,7 @@
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
 					"parameter_enable" : 0,
-					"patching_rect" : [ 148.5, 644.0, 24.0, 24.0 ]
+					"patching_rect" : [ 149.0, 689.0, 24.0, 24.0 ]
 				}
 
 			}
@@ -244,7 +314,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 193.5, 480.0, 83.0, 22.0 ],
+					"patching_rect" : [ 194.0, 525.0, 83.0, 22.0 ],
 					"text" : "mode random"
 				}
 
@@ -256,7 +326,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 38.5, 528.0, 45.0, 22.0 ],
+					"patching_rect" : [ 39.0, 573.0, 45.0, 22.0 ],
 					"text" : "reset a"
 				}
 
@@ -268,7 +338,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 193.5, 528.0, 58.0, 22.0 ],
+					"patching_rect" : [ 194.0, 573.0, 58.0, 22.0 ],
 					"text" : "mode dfs"
 				}
 
@@ -280,7 +350,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 193.5, 504.0, 58.0, 22.0 ],
+					"patching_rect" : [ 194.0, 549.0, 58.0, 22.0 ],
 					"text" : "mode bfs"
 				}
 
@@ -292,7 +362,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 46.5, 645.0, 50.0, 22.0 ],
+					"patching_rect" : [ 47.0, 690.0, 50.0, 22.0 ],
 					"text" : "a"
 				}
 
@@ -304,20 +374,8 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 38.5, 504.0, 31.0, 22.0 ],
+					"patching_rect" : [ 39.0, 549.0, 31.0, 22.0 ],
 					"text" : "step"
-				}
-
-			}
-, 			{
-				"box" : 				{
-					"id" : "obj-30",
-					"maxclass" : "button",
-					"numinlets" : 1,
-					"numoutlets" : 1,
-					"outlettype" : [ "bang" ],
-					"parameter_enable" : 0,
-					"patching_rect" : [ 288.0, 310.0, 24.0, 24.0 ]
 				}
 
 			}
@@ -328,7 +386,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
-					"patching_rect" : [ 194.0, 113.0, 58.0, 22.0 ],
+					"patching_rect" : [ 299.0, 128.0, 58.0, 22.0 ],
 					"text" : "loadbang"
 				}
 
@@ -340,7 +398,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 2,
 					"outlettype" : [ "", "bang" ],
-					"patching_rect" : [ 38.5, 598.0, 129.0, 22.0 ],
+					"patching_rect" : [ 39.0, 643.0, 129.0, 22.0 ],
 					"text" : "graf.traverse myGraph"
 				}
 
@@ -352,19 +410,8 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 385.0, 113.0, 31.0, 22.0 ],
+					"patching_rect" : [ 625.0, 173.0, 31.0, 22.0 ],
 					"text" : "next"
-				}
-
-			}
-, 			{
-				"box" : 				{
-					"id" : "obj-24",
-					"maxclass" : "newobj",
-					"numinlets" : 1,
-					"numoutlets" : 0,
-					"patching_rect" : [ 160.0, 318.0, 32.0, 22.0 ],
-					"text" : "print"
 				}
 
 			}
@@ -374,7 +421,7 @@
 					"maxclass" : "comment",
 					"numinlets" : 1,
 					"numoutlets" : 0,
-					"patching_rect" : [ 70.0, 9.0, 150.0, 20.0 ],
+					"patching_rect" : [ 70.0, 9.0, 86.0, 20.0 ],
 					"text" : "TEST PATCH"
 				}
 
@@ -386,7 +433,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 342.0, 113.0, 41.0, 22.0 ],
+					"patching_rect" : [ 387.0, 173.0, 41.0, 22.0 ],
 					"text" : "goto c"
 				}
 
@@ -398,7 +445,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 298.0, 113.0, 42.0, 22.0 ],
+					"patching_rect" : [ 343.0, 173.0, 42.0, 22.0 ],
 					"text" : "goto b"
 				}
 
@@ -410,7 +457,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 254.0, 113.0, 42.0, 22.0 ],
+					"patching_rect" : [ 299.0, 173.0, 42.0, 22.0 ],
 					"text" : "goto a"
 				}
 
@@ -422,7 +469,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 462.0, 230.0, 88.0, 22.0 ],
+					"patching_rect" : [ 462.0, 275.0, 88.0, 22.0 ],
 					"text" : "addedge c a 1."
 				}
 
@@ -434,7 +481,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 365.0, 230.0, 95.0, 22.0 ],
+					"patching_rect" : [ 365.0, 275.0, 95.0, 22.0 ],
 					"text" : "addedge b a 0.2"
 				}
 
@@ -446,7 +493,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 268.0, 230.0, 95.0, 22.0 ],
+					"patching_rect" : [ 268.0, 275.0, 95.0, 22.0 ],
 					"text" : "addedge b c 0.8"
 				}
 
@@ -458,7 +505,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 171.0, 230.0, 95.0, 22.0 ],
+					"patching_rect" : [ 171.0, 275.0, 95.0, 22.0 ],
 					"text" : "addedge a c 0.3"
 				}
 
@@ -470,7 +517,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 74.0, 230.0, 95.0, 22.0 ],
+					"patching_rect" : [ 74.0, 275.0, 95.0, 22.0 ],
 					"text" : "addedge a b 0.7"
 				}
 
@@ -483,7 +530,7 @@
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
 					"parameter_enable" : 0,
-					"patching_rect" : [ 134.0, 77.0, 24.0, 24.0 ]
+					"patching_rect" : [ 134.0, 122.0, 24.0, 24.0 ]
 				}
 
 			}
@@ -494,7 +541,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
-					"patching_rect" : [ 134.0, 113.0, 58.0, 22.0 ],
+					"patching_rect" : [ 134.0, 158.0, 58.0, 22.0 ],
 					"text" : "loadbang"
 				}
 
@@ -507,7 +554,7 @@
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
 					"parameter_enable" : 0,
-					"patching_rect" : [ 74.0, 77.0, 24.0, 24.0 ]
+					"patching_rect" : [ 74.0, 98.0, 24.0, 24.0 ]
 				}
 
 			}
@@ -518,7 +565,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 208.0, 176.0, 65.0, 22.0 ],
+					"patching_rect" : [ 208.0, 236.0, 65.0, 22.0 ],
 					"text" : "addnode c"
 				}
 
@@ -530,7 +577,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 141.0, 176.0, 65.0, 22.0 ],
+					"patching_rect" : [ 141.0, 236.0, 65.0, 22.0 ],
 					"text" : "addnode b"
 				}
 
@@ -542,7 +589,7 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 74.0, 176.0, 65.0, 22.0 ],
+					"patching_rect" : [ 74.0, 236.0, 65.0, 22.0 ],
 					"text" : "addnode a"
 				}
 
@@ -554,7 +601,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
-					"patching_rect" : [ 74.0, 113.0, 58.0, 22.0 ],
+					"patching_rect" : [ 74.0, 158.0, 58.0, 22.0 ],
 					"text" : "loadbang"
 				}
 
@@ -566,7 +613,7 @@
 					"numinlets" : 1,
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
-					"patching_rect" : [ 74.0, 284.0, 82.0, 22.0 ],
+					"patching_rect" : [ 74.0, 329.0, 82.0, 22.0 ],
 					"text" : "graf myGraph"
 				}
 
@@ -751,6 +798,13 @@
 , 			{
 				"patchline" : 				{
 					"destination" : [ "obj-1", 0 ],
+					"source" : [ "obj-25", 0 ]
+				}
+
+			}
+, 			{
+				"patchline" : 				{
+					"destination" : [ "obj-1", 0 ],
 					"source" : [ "obj-26", 0 ]
 				}
 
@@ -804,15 +858,6 @@
 , 			{
 				"patchline" : 				{
 					"destination" : [ "obj-27", 0 ],
-					"order" : 1,
-					"source" : [ "obj-32", 0 ]
-				}
-
-			}
-, 			{
-				"patchline" : 				{
-					"destination" : [ "obj-63", 0 ],
-					"order" : 0,
 					"source" : [ "obj-32", 0 ]
 				}
 
@@ -924,6 +969,13 @@
 			}
 , 			{
 				"patchline" : 				{
+					"destination" : [ "obj-1", 0 ],
+					"source" : [ "obj-50", 0 ]
+				}
+
+			}
+, 			{
+				"patchline" : 				{
 					"destination" : [ "obj-34", 0 ],
 					"source" : [ "obj-51", 0 ]
 				}
@@ -939,7 +991,7 @@
 , 			{
 				"patchline" : 				{
 					"destination" : [ "obj-51", 0 ],
-					"source" : [ "obj-63", 0 ]
+					"source" : [ "obj-7", 0 ]
 				}
 
 			}

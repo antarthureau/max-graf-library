@@ -17,8 +17,8 @@
         size                       — output number of nodes
         print                      — dump full graph to Max console
         clear                      — remove all nodes and edges, reset state
-        write <filename>           — save graph to CSV file
-        read  <filename>           — load graph from CSV file (clears existing graph first)
+        write [filename]           — save graph to CSV file (opens dialog if no filename)
+        read  [filename]           — load graph from CSV file (opens dialog if no filename)
 
     CSV file format:
         # comment lines (leading # after optional whitespace)
@@ -28,6 +28,14 @@
     Instance naming:
         graf my_graph               — named instance, referenceable by other objects
         graf                        — auto-named (graf_0, graf_1, ...), still functional
+
+    Notifications:
+        Every state-changing message (addnode, removenode, addedge, removeedge,
+        goto, next, clear, read) calls:
+            object_notify((t_object *)x, gensym("modified"), NULL)
+        This is what allows graf.affiche to redraw automatically. Subscribers
+        receive the notification via their notify() method. Equivalent to
+        Observable.notifyObservers() in Java.
 
     Basic sequencer usage:
         - addnode to build states (nodes carry pitch/duration/velocity as payload)
@@ -152,10 +160,13 @@ void ext_main(void *r)
     class_addmethod(c, (method)graf_size,        "size",        0);
     class_addmethod(c, (method)graf_print,       "print",       0);
 
-    /* persistence */
+    /* persistence
+       A_DEFSYM: like an Optional<String> in Java — argument is optional.
+       When no filename is given, Max passes gensym("") (empty string).
+       Handlers check for empty string and open a file dialog instead. */
     class_addmethod(c, (method)graf_clear,       "clear",       0);
-    class_addmethod(c, (method)graf_write,       "write",       A_SYM,   0);
-    class_addmethod(c, (method)graf_read,        "read",        A_SYM,   0);
+    class_addmethod(c, (method)graf_write,       "write",       A_DEFSYM, 0);
+    class_addmethod(c, (method)graf_read,        "read",        A_DEFSYM, 0);
 
     class_register(CLASS_BOX, c);
     graf_class = c;
@@ -488,7 +499,8 @@ static void graf_write_to_handle(t_graf *x, t_filehandle fh)
  *
  * Uses the quiet core operations to avoid flooding the Max console
  * with per-node/per-edge messages during bulk load. graf_read posts
- * a single summary line after this function returns.
+ * a single summary line and fires a single object_notify after this
+ * function returns.
  */
 static void graf_load_from_buffer(t_graf *x, char *buf, t_ptr_size count)
 {
@@ -629,6 +641,8 @@ void graf_assist(t_graf *x, void *b, long m, long a, char *s)
  * Output format: node id is the message selector; payload atoms follow.
  * Example (node foo with payload [60, 0.5]): outlet sends "foo 60 0.5"
  * which downstream [route] or [unpack] objects can handle.
+ *
+ * bang does NOT notify — it is a query, not a state change.
  */
 void graf_bang(t_graf *x)
 {
@@ -650,6 +664,8 @@ void graf_bang(t_graf *x)
  *
  * Add a node. ID auto-increments if omitted. Any additional arguments
  * become the node's payload (ints, floats, or symbols — any Max atoms).
+ *
+ * Notifies subscribers on success so graf.affiche redraws.
  *
  * Examples:
  *   addnode              → node0 (no payload)
@@ -679,8 +695,10 @@ void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
     long payload_count = (argc > 1) ? argc - 1 : 0;
     t_atom *payload    = (payload_count > 0) ? argv + 1 : NULL;
 
-    if (graf_addnode_quiet(x, id, payload_count, payload) == 0)
+    if (graf_addnode_quiet(x, id, payload_count, payload) == 0) {
         post("graf: added node '%s'", id->s_name);
+        object_notify((t_object *)x, gensym("modified"), NULL);
+    }
 }
 
 /**
@@ -691,6 +709,8 @@ void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  *   2. Remove all edges pointing TO this node from other nodes
  *   3. Shift the nodes array to fill the gap
  *   4. Clear current pointer if it was pointing to this node
+ *
+ * Notifies subscribers on success.
  */
 void graf_removenode(t_graf *x, t_symbol *id)
 {
@@ -733,6 +753,7 @@ void graf_removenode(t_graf *x, t_symbol *id)
     if (x->current == id) x->current = NULL;
 
     post("graf: removed node '%s'", id->s_name);
+    object_notify((t_object *)x, gensym("modified"), NULL);
 }
 
 /**
@@ -740,6 +761,8 @@ void graf_removenode(t_graf *x, t_symbol *id)
  *
  * Add a directed edge u→v. Weight defaults to 0.0.
  * Both nodes must already exist. Duplicate edges are rejected.
+ *
+ * Notifies subscribers on success.
  */
 void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -753,15 +776,18 @@ void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
     t_symbol *v      = atom_getsym(argv + 1);
     double    weight = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
 
-    if (graf_addedge_quiet(x, u, v, weight) == 0)
+    if (graf_addedge_quiet(x, u, v, weight) == 0) {
         post("graf: added edge '%s' -> '%s' (weight: %.2f)",
              u->s_name, v->s_name, weight);
+        object_notify((t_object *)x, gensym("modified"), NULL);
+    }
 }
 
 /**
  * removeedge <u> <v>
  *
  * Remove the directed edge u→v only (not v→u).
+ * Notifies subscribers on success.
  */
 void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -791,6 +817,7 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
             }
             src->edge_count--;
             post("graf: removed edge '%s' -> '%s'", u->s_name, v->s_name);
+            object_notify((t_object *)x, gensym("modified"), NULL);
             return;
         }
     }
@@ -805,6 +832,10 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  * Set the current traversal position to the specified node.
  * Direct jump — edges are ignored, any node can be reached.
  * After this, bang outputs that node's id and payload.
+ *
+ * Notifies subscribers so graf.affiche highlights the new current node.
+ * This is also the hook used in the [prepend goto] → [graf] patcher pattern
+ * that connects graf.traverse output to graf.affiche highlighting.
  */
 void graf_goto(t_graf *x, t_symbol *id)
 {
@@ -814,6 +845,7 @@ void graf_goto(t_graf *x, t_symbol *id)
     }
     x->current = id;
     post("graf: current -> '%s'", id->s_name);
+    object_notify((t_object *)x, gensym("modified"), NULL);
 }
 
 /**
@@ -822,6 +854,8 @@ void graf_goto(t_graf *x, t_symbol *id)
  * Move to a uniform-random outgoing neighbour, output the new node.
  * This is the only traversal built into graf — intentionally simple.
  * Weight-aware traversal (Markov chain, DFS, BFS) lives in graf.traverse.
+ *
+ * Notifies subscribers after moving so graf.affiche follows along.
  */
 void graf_next(t_graf *x)
 {
@@ -850,6 +884,8 @@ void graf_next(t_graf *x)
     outlet_anything(x->outlet, next_node->id,
                     next_node->payload_count,
                     next_node->payload_count > 0 ? next_node->payload : NULL);
+
+    object_notify((t_object *)x, gensym("modified"), NULL);
 }
 
 /**
@@ -857,6 +893,7 @@ void graf_next(t_graf *x)
  *
  * Output "hasnode 1" or "hasnode 0".
  * Equivalent to IGraph.hasVertice() in Java.
+ * Query only — no notify.
  */
 void graf_hasnode(t_graf *x, t_symbol *id)
 {
@@ -870,6 +907,7 @@ void graf_hasnode(t_graf *x, t_symbol *id)
  *
  * Output each outgoing neighbour as a separate "neighbour <id>" message.
  * Equivalent to IGraph.neighbours() in Java.
+ * Query only — no notify.
  */
 void graf_neighbours(t_graf *x, t_symbol *id)
 {
@@ -898,6 +936,7 @@ void graf_neighbours(t_graf *x, t_symbol *id)
  *
  * Output "adjacent 1" if directed edge u→v exists, "adjacent 0" otherwise.
  * Equivalent to IGraph.adjacent() in Java.
+ * Query only — no notify.
  */
 void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -932,6 +971,7 @@ void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 /**
  * size — output "size <n>".
  * Equivalent to IGraph.size() in Java.
+ * Query only — no notify.
  */
 void graf_size(t_graf *x)
 {
@@ -942,6 +982,7 @@ void graf_size(t_graf *x)
 
 /**
  * print — dump entire graph structure to the Max console.
+ * Query only — no notify.
  */
 void graf_print(t_graf *x)
 {
@@ -981,6 +1022,8 @@ void graf_print(t_graf *x)
  * reallocation. next_node_id resets to 0 so auto-named nodes restart
  * from "node0". current is cleared.
  *
+ * Notifies subscribers so graf.affiche redraws to an empty state.
+ *
  * Java analogy: like calling clear() on an ArrayList — the backing array
  * stays allocated, but length resets to 0 and the old elements are released.
  */
@@ -997,25 +1040,26 @@ void graf_clear(t_graf *x)
     x->current      = NULL;
     x->next_node_id = 0;
     post("graf '%s': cleared", x->name->s_name);
+    object_notify((t_object *)x, gensym("modified"), NULL);
 }
 
 /**
- * write <filename>
+ * write [filename]
  *
  * Serialize the entire graph to a CSV file.
  *
- * filename can be a full POSIX path (/Users/me/graph.csv) or a bare
- * filename (my_graph.csv). A bare filename is written to Max's default
- * path, typically the current patcher's folder.
+ * With filename argument: written to that path directly.
+ *   - Full POSIX path (/Users/me/graph.csv): used as-is.
+ *   - Bare name (my_graph.csv): written to Max's default path (patcher folder).
  *
- * Uses Max's sysfile API rather than stdio — required for correct
- * operation in Max's sandboxed environment and consistent with how
- * buffer~ and dict write their files.
+ * Without filename argument (A_DEFSYM sends gensym("")):
+ *   Opens a system save dialog. Returns silently if user cancels.
  *
- * path_frompathname splits a full POSIX path into a Max volume short
- * and a bare filename. If it fails (bare filename given), we fall back
- * to path_getdefault() which returns the patcher folder.
- * path_createsysfile creates or overwrites the file (type 0 = generic).
+ * Uses Max's sysfile API (not stdio) for correct operation in Max's
+ * sandboxed environment, consistent with buffer~ and dict.
+ *
+ * Java analogy: like a FileWriter, but with the OS file picker
+ * triggered via JFileChooser when no path is provided.
  */
 void graf_write(t_graf *x, t_symbol *filename)
 {
@@ -1023,42 +1067,60 @@ void graf_write(t_graf *x, t_symbol *filename)
     char         name[MAX_PATH_CHARS];
     t_filehandle fh;
 
-    if (path_frompathname(filename->s_name, &path, name) != 0) {
-        path = path_getdefault();
-        strncpy(name, filename->s_name, MAX_PATH_CHARS);
-        name[MAX_PATH_CHARS - 1] = '\0';
+    if (filename->s_name[0] == '\0') {
+        /* No filename given — open system save dialog.
+           saveasdialog_extended returns 0 if the user confirmed a path,
+           non-zero if they cancelled. The confirmed name and volume are
+           written into name[] and path. */
+        t_fourcc type = 0;
+        strncpy(name, "untitled.csv", MAX_PATH_CHARS);
+        if (saveasdialog_extended(name, &path, &type, NULL, 0) != 0)
+            return; /* user cancelled — silent exit */
+    } else {
+        /* Filename provided — split into volume + bare name.
+           path_frompathname handles full POSIX paths.
+           Falls back to default path (patcher folder) for bare names. */
+        if (path_frompathname(filename->s_name, &path, name) != 0) {
+            path = path_getdefault();
+            strncpy(name, filename->s_name, MAX_PATH_CHARS);
+            name[MAX_PATH_CHARS - 1] = '\0';
+        }
     }
 
     if (path_createsysfile(name, path, 0, &fh) != 0) {
         object_error((t_object *)x,
-                     "write: could not create file '%s'", filename->s_name);
+                     "write: could not create file '%s'", name);
         return;
     }
 
     graf_write_to_handle(x, fh);
     sysfile_close(fh);
     post("graf '%s': written to '%s' (%ld nodes)",
-         x->name->s_name, filename->s_name, x->node_count);
+         x->name->s_name, name, x->node_count);
 }
 
 /**
- * read <filename>
+ * read [filename]
  *
  * Load a graph from a CSV file, replacing the current contents.
  * Calls clear first, then parses the file.
  *
- * filename can be a full POSIX path or a bare filename. A bare filename
- * is searched on Max's file search path (patcher folder first, then
- * the Max search path) via locatefile_extended.
+ * With filename argument: located by path or Max search path.
+ *   - Full POSIX path: path_frompathname.
+ *   - Bare name: locatefile_extended searches patcher folder then Max path.
  *
- * Strategy:
- *   1. path_frompathname  — succeeds for full POSIX paths
- *   2. locatefile_extended — fallback, searches Max path for bare names
- *   3. Read entire file into a heap buffer (sysfile_geteof + sysfile_read)
- *   4. Close file handle, clear graph, parse buffer, free buffer
+ * Without filename argument (A_DEFSYM sends gensym("")):
+ *   Opens a system open dialog. Returns silently if user cancels.
  *
- * Reading into memory first (vs. line-by-line) simplifies the code and
- * is safe for the graph sizes expected in compositional use (< a few MB).
+ * Load strategy:
+ *   1. Resolve and open the file
+ *   2. Read entire file into a heap buffer (sysfile_geteof + sysfile_read)
+ *   3. Close file handle, clear graph, parse buffer, free buffer
+ *   4. Single object_notify after the full load — graf.affiche redraws once.
+ *
+ * Note: bulk load uses quiet helpers (no per-node notify during the loop).
+ * One notify fires at the end. This is cleaner than coalescing many notifies
+ * and avoids any intermediate partial-graph redraws.
  */
 void graf_read(t_graf *x, t_symbol *filename)
 {
@@ -1067,22 +1129,31 @@ void graf_read(t_graf *x, t_symbol *filename)
     t_filehandle fh;
     t_fourcc     type = 0;
 
-    strncpy(name, filename->s_name, MAX_PATH_CHARS);
-    name[MAX_PATH_CHARS - 1] = '\0';
-
-    if (path_frompathname(filename->s_name, &path, name) != 0) {
-        /* bare filename: search Max's file path */
+    if (filename->s_name[0] == '\0') {
+        /* No filename given — open system open dialog.
+           open_dialog returns 0 if the user selected a file,
+           non-zero if they cancelled. */
+        name[0] = '\0';
+        if (open_dialog(name, &path, &type, NULL, 0) != 0)
+            return; /* user cancelled — silent exit */
+    } else {
         strncpy(name, filename->s_name, MAX_PATH_CHARS);
-        if (locatefile_extended(name, &path, &type, NULL, 0) != 0) {
-            object_error((t_object *)x,
-                         "read: file '%s' not found", filename->s_name);
-            return;
+        name[MAX_PATH_CHARS - 1] = '\0';
+
+        if (path_frompathname(filename->s_name, &path, name) != 0) {
+            /* bare filename: search Max's file path */
+            strncpy(name, filename->s_name, MAX_PATH_CHARS);
+            if (locatefile_extended(name, &path, &type, NULL, 0) != 0) {
+                object_error((t_object *)x,
+                             "read: file '%s' not found", filename->s_name);
+                return;
+            }
         }
     }
 
     if (path_opensysfile(name, path, &fh, READ_PERM) != 0) {
         object_error((t_object *)x,
-                     "read: cannot open '%s'", filename->s_name);
+                     "read: cannot open '%s'", name);
         return;
     }
 
@@ -1102,11 +1173,15 @@ void graf_read(t_graf *x, t_symbol *filename)
     buf[count] = '\0';
     sysfile_close(fh);
 
-    /* clear existing graph, parse buffer, free buffer */
+    /* clear existing graph, parse buffer, free buffer.
+       graf_clear fires its own notify (empty-state redraw).
+       graf_load_from_buffer uses quiet helpers — no per-node notifies.
+       A second notify below triggers the final populated redraw. */
     graf_clear(x);
     graf_load_from_buffer(x, buf, count);
     sysmem_freeptr(buf);
 
     post("graf '%s': loaded '%s' — %ld nodes",
-         x->name->s_name, filename->s_name, x->node_count);
+         x->name->s_name, name, x->node_count);
+    object_notify((t_object *)x, gensym("modified"), NULL);
 }

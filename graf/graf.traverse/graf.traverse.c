@@ -139,6 +139,9 @@ t_symbol *graf_traverse_work_pop(t_graf_traverse *x);
 t_symbol *graf_traverse_work_dequeue(t_graf_traverse *x);
 long      graf_traverse_work_empty(t_graf_traverse *x);
 
+//TODO: keep track of visited nodes (hammiltonian path support?) and/or visited edges (eulerian path support?)
+//TODO:
+
 /* output */
 void graf_traverse_output_node(t_graf_traverse *x, t_graf *g, t_symbol *id);
 
