@@ -12,13 +12,15 @@
  *     in the same patcher (or any loaded patcher).
  *
  * MESSAGES IN
- *   step             advance one step; output new node on left outlet
- *   reset [<id>]     reset traversal; optional symbol sets the start node
- *   mode random      weighted random walk (default)
- *   mode dfs         depth-first search
- *   mode bfs         breadth-first search
- *   from <id>        set start node for future resets (no immediate reset)
- *   bang             re-output current node without advancing
+ *   step                 advance one step; output new node on left outlet
+ *   reset [<id> [<tgt>]] reset traversal; 1st symbol = start, 2nd = target (dijkstra)
+ *   mode random          weighted random walk (default)
+ *   mode dfs             depth-first search
+ *   mode bfs             breadth-first search
+ *   mode dijkstra        weighted shortest path from start to target
+ *   from <id>            set start node for future resets (no immediate reset)
+ *   to <id>              set target node for shortest-path search
+ *   bang                 re-output current node without advancing
  *
  * OUTLETS
  *   0  (left)  — node id + payload on each step (symbol or list)
@@ -56,6 +58,7 @@
 #include "ext.h"
 #include "ext_obex.h"
 #include "graf.h"           // t_graf_node, t_graf, graf_find(), graf_find_node()
+#include <math.h>           // INFINITY — Dijkstra distance initialisation
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -64,6 +67,7 @@
 #define GRAF_TRAVERSE_RANDOM    0   // weighted random walk (stateless)
 #define GRAF_TRAVERSE_DFS       1   // depth-first search
 #define GRAF_TRAVERSE_BFS       2   // breadth-first search
+#define GRAF_TRAVERSE_DIJKSTRA  3   // weighted shortest path (precomputed, then walked)
 
 #define GRAF_TRAVERSE_INIT_CAP  16  // initial capacity for visited/work arrays
 
@@ -110,6 +114,26 @@ typedef struct _graf_traverse {
 
     long        initialized;        // 1 after reset or first auto-init, 0 after mode change
     long        done;               // 1 when traversal is exhausted
+
+    /* Dijkstra / shortest-path state.
+     *
+     * Dijkstra is not a step-by-step exploration like DFS/BFS — it is computed
+     * in full at init time, producing a complete start->target path that 'step'
+     * then walks one node at a time. So these arrays hold the SOLVER state
+     * (dist/prev/settled, indexed parallel to graf->nodes) and the RESULT
+     * (path[], the reconstructed node sequence).
+     *
+     * Java analogy: like caching the int[] result of Dijkstra.shortestPath(a, b)
+     * and then iterating over it.
+     */
+    t_symbol   *target;             // goal node for shortest-path modes (set via 'to')
+    double     *dist;               // dist[i]    = shortest known cost to graf node i
+    long       *prev;               // prev[i]    = predecessor index on shortest path (-1 = none)
+    char       *settled;            // settled[i] = 1 once node i's distance is final
+    long        dijkstra_cap;       // allocated length of dist/prev/settled/path
+    t_symbol  **path;               // reconstructed path, ordered start -> target
+    long        path_len;           // number of nodes in path
+    long        path_pos;           // index of next path node to emit on 'step'
 } t_graf_traverse;
 
 
@@ -149,12 +173,20 @@ void graf_traverse_output_node(t_graf_traverse *x, t_graf *g, t_symbol *id);
 void graf_traverse_step_random(t_graf_traverse *x, t_graf *g);
 void graf_traverse_step_dfs(t_graf_traverse *x, t_graf *g);
 void graf_traverse_step_bfs(t_graf_traverse *x, t_graf *g);
+void graf_traverse_step_dijkstra(t_graf_traverse *x, t_graf *g);
+
+/* shortest-path solver (Dijkstra) */
+static long graf_traverse_node_index(t_graf *g, t_symbol *id);
+t_max_err   graf_traverse_ensure_dijkstra(t_graf_traverse *x, long n);
+t_max_err   graf_traverse_compute_dijkstra(t_graf_traverse *x, t_graf *g,
+                                           t_symbol *start, t_symbol *target);
 
 /* message handlers */
 void graf_traverse_step(t_graf_traverse *x);
 void graf_traverse_reset(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv);
 void graf_traverse_mode(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv);
 void graf_traverse_from(t_graf_traverse *x, t_symbol *id);
+void graf_traverse_to(t_graf_traverse *x, t_symbol *id);
 void graf_traverse_bang(t_graf_traverse *x);
 
 
@@ -187,6 +219,7 @@ void ext_main(void *r)
     class_addmethod(c, (method)graf_traverse_reset, "reset",  A_GIMME, 0);
     class_addmethod(c, (method)graf_traverse_mode,  "mode",   A_GIMME, 0);
     class_addmethod(c, (method)graf_traverse_from,  "from",   A_SYM,   0);
+    class_addmethod(c, (method)graf_traverse_to,    "to",     A_SYM,   0);
 
     class_register(CLASS_BOX, c);
     s_graf_traverse_class = c;
@@ -244,6 +277,15 @@ void *graf_traverse_new(t_symbol *s, long argc, t_atom *argv)
     x->initialized   = 0;
     x->done          = 0;
 
+    x->target        = NULL;
+    x->dist          = NULL;
+    x->prev          = NULL;
+    x->settled       = NULL;
+    x->dijkstra_cap  = 0;
+    x->path          = NULL;
+    x->path_len      = 0;
+    x->path_pos      = 0;
+
     return x;
 }
 
@@ -260,6 +302,10 @@ void graf_traverse_free(t_graf_traverse *x)
 {
     if (x->visited) { sysmem_freeptr(x->visited); x->visited = NULL; }
     if (x->work)    { sysmem_freeptr(x->work);    x->work    = NULL; }
+    if (x->dist)    { sysmem_freeptr(x->dist);    x->dist    = NULL; }
+    if (x->prev)    { sysmem_freeptr(x->prev);    x->prev    = NULL; }
+    if (x->settled) { sysmem_freeptr(x->settled); x->settled = NULL; }
+    if (x->path)    { sysmem_freeptr(x->path);    x->path    = NULL; }
 }
 
 
@@ -307,6 +353,8 @@ void graf_traverse_clear_state(t_graf_traverse *x)
     x->visited_count = 0;
     x->work_count    = 0;
     x->work_head     = 0;
+    x->path_len      = 0;
+    x->path_pos      = 0;
     x->initialized   = 0;
     x->done          = 0;
     /* current is NOT reset here — keep last known position for bang */
@@ -362,6 +410,30 @@ t_max_err graf_traverse_init(t_graf_traverse *x, t_symbol *start_id)
 
     /* Random walk is stateless — no arrays needed */
     if (x->mode == GRAF_TRAVERSE_RANDOM) {
+        x->initialized = 1;
+        return MAX_ERR_NONE;
+    }
+
+    /*
+     * Dijkstra is computed in full here, not stepped. It needs a target node.
+     * Resolve and validate it, run the solver, store the resulting path.
+     * 'step' then walks path[] node by node.
+     */
+    if (x->mode == GRAF_TRAVERSE_DIJKSTRA) {
+        if (!x->target) {
+            object_error((t_object *)x,
+                         "graf.traverse: dijkstra needs a target — use 'to <id>' "
+                         "or 'reset <start> <target>'");
+            return MAX_ERR_GENERIC;
+        }
+        if (!graf_find_node(g, x->target)) {
+            object_error((t_object *)x,
+                         "graf.traverse: target node '%s' not found in [graf '%s']",
+                         x->target->s_name, x->graf_name->s_name);
+            return MAX_ERR_GENERIC;
+        }
+        if (graf_traverse_compute_dijkstra(x, g, sid, x->target) != MAX_ERR_NONE)
+            return MAX_ERR_GENERIC;
         x->initialized = 1;
         return MAX_ERR_NONE;
     }
@@ -568,6 +640,204 @@ void graf_traverse_output_node(t_graf_traverse *x, t_graf *g, t_symbol *id)
 }
 
 
+////////////////////////// shortest-path solver (Dijkstra)
+
+/**
+ * graf_traverse_node_index — find a node's array index within a graf.
+ *
+ * Dijkstra's bookkeeping arrays (dist/prev/settled) are indexed in parallel
+ * with graf->nodes[], so we need the integer index of a node, not a pointer.
+ *
+ * O(n) linear scan — fine at sequencer scale (n < ~100). Pointer equality on
+ * the interned symbol id is valid, same as graf_find_node().
+ *
+ * Java analogy: List.indexOf(id), returning -1 when absent.
+ */
+static long graf_traverse_node_index(t_graf *g, t_symbol *id)
+{
+    long i;
+    for (i = 0; i < g->node_count; i++) {
+        if (g->nodes[i].id == id)
+            return i;
+    }
+    return -1;
+}
+
+/**
+ * graf_traverse_ensure_dijkstra — guarantee the solver arrays hold >= n slots.
+ *
+ * Allocates dist/prev/settled/path on first use and grows them (doubling) when
+ * the graph has gained nodes since the last solve. All four arrays are kept the
+ * same length so they stay parallel-indexable with graf->nodes[].
+ *
+ * Java analogy: ensureCapacity() on four parallel ArrayLists at once.
+ *
+ * Note: sysmem_resizeptr needs a previously-allocated pointer, so each array
+ * uses sysmem_newptr on first allocation and sysmem_resizeptr thereafter.
+ */
+t_max_err graf_traverse_ensure_dijkstra(t_graf_traverse *x, long n)
+{
+    if (n <= x->dijkstra_cap) return MAX_ERR_NONE;
+
+    long cap = (x->dijkstra_cap > 0) ? x->dijkstra_cap : GRAF_TRAVERSE_INIT_CAP;
+    while (cap < n) cap *= 2;
+
+    double    *nd    = x->dist
+                       ? (double *)sysmem_resizeptr(x->dist,    cap * sizeof(double))
+                       : (double *)sysmem_newptr(cap * sizeof(double));
+    long      *np    = x->prev
+                       ? (long *)sysmem_resizeptr(x->prev,      cap * sizeof(long))
+                       : (long *)sysmem_newptr(cap * sizeof(long));
+    char      *ns    = x->settled
+                       ? (char *)sysmem_resizeptr(x->settled,   cap * sizeof(char))
+                       : (char *)sysmem_newptr(cap * sizeof(char));
+    t_symbol **npath = x->path
+                       ? (t_symbol **)sysmem_resizeptr(x->path, cap * sizeof(t_symbol *))
+                       : (t_symbol **)sysmem_newptr(cap * sizeof(t_symbol *));
+
+    /* Keep any allocation that succeeded so free() can release it later. */
+    if (nd)    x->dist    = nd;
+    if (np)    x->prev    = np;
+    if (ns)    x->settled = ns;
+    if (npath) x->path    = npath;
+
+    if (!nd || !np || !ns || !npath) {
+        object_error((t_object *)x,
+                     "graf.traverse: out of memory allocating dijkstra state");
+        return MAX_ERR_OUT_OF_MEM;
+    }
+
+    x->dijkstra_cap = cap;
+    return MAX_ERR_NONE;
+}
+
+/**
+ * graf_traverse_compute_dijkstra — single-source shortest path, start -> target.
+ *
+ * Standard Dijkstra. Because sequencer graphs are tiny (n < ~100) the priority
+ * queue is just a linear scan for the minimum-distance unsettled node — O(n^2)
+ * overall, which is irrelevant at this scale and far simpler than a binary heap.
+ * (ext_hashtab / a real heap stay a future optimisation, not needed here.)
+ *
+ * EDGE WEIGHT SEMANTICS — important: here edge weight means COST (lower = better),
+ * the OPPOSITE of the weighted random walk where weight means likelihood
+ * (higher = more probable). Populate weights as distances/costs for meaningful
+ * results. Dijkstra also assumes non-negative weights; a negative weight is
+ * flagged once and the result may be wrong. All-zero weights still yield a valid
+ * path, but an essentially arbitrary one (every route costs the same).
+ *
+ * On success the reconstructed path (start..target) is stored in x->path with
+ * x->path_len set and x->path_pos reset to 0.
+ *
+ * Java analogy: the body of Dijkstra.shortestPath(start, target) returning the
+ * node list, with dist[]/prev[] as the usual working arrays.
+ *
+ * @return MAX_ERR_NONE on success; MAX_ERR_GENERIC if no path exists.
+ */
+t_max_err graf_traverse_compute_dijkstra(t_graf_traverse *x, t_graf *g,
+                                         t_symbol *start, t_symbol *target)
+{
+    long n = g->node_count;
+    if (n == 0) {
+        object_error((t_object *)x, "graf.traverse: dijkstra on empty graph");
+        return MAX_ERR_GENERIC;
+    }
+
+    long src = graf_traverse_node_index(g, start);
+    long dst = graf_traverse_node_index(g, target);
+    if (src < 0 || dst < 0) {
+        object_error((t_object *)x,
+                     "graf.traverse: dijkstra start/target not in graph");
+        return MAX_ERR_GENERIC;
+    }
+
+    if (graf_traverse_ensure_dijkstra(x, n) != MAX_ERR_NONE)
+        return MAX_ERR_GENERIC;
+
+    long i;
+    for (i = 0; i < n; i++) {
+        x->dist[i]    = INFINITY;
+        x->prev[i]    = -1;
+        x->settled[i] = 0;
+    }
+    x->dist[src] = 0.0;
+
+    long warned_negative = 0;
+
+    for (;;) {
+        /* Priority queue as a linear scan: pick the unsettled node of min dist. */
+        long   u    = -1;
+        double best = INFINITY;
+        for (i = 0; i < n; i++) {
+            if (!x->settled[i] && x->dist[i] < best) {
+                best = x->dist[i];
+                u    = i;
+            }
+        }
+
+        if (u < 0)    break;    /* nothing reachable remains */
+        if (u == dst) break;    /* target finalised — its distance is now final */
+
+        x->settled[u] = 1;
+
+        /* Relax every outgoing edge of u. */
+        t_graf_node *un = &g->nodes[u];
+        long e;
+        for (e = 0; e < un->edge_count; e++) {
+            double w = un->edge_weights[e];
+
+            if (w < 0.0 && !warned_negative) {
+                object_warn((t_object *)x,
+                            "graf.traverse: negative edge weight — dijkstra result may be incorrect");
+                warned_negative = 1;
+            }
+
+            long v = graf_traverse_node_index(g, un->edges_to[e]);
+            if (v < 0 || x->settled[v]) continue;   /* dangling target or already final */
+
+            double nd = x->dist[u] + w;
+            if (nd < x->dist[v]) {
+                x->dist[v] = nd;
+                x->prev[v] = u;
+            }
+        }
+    }
+
+    if (x->dist[dst] == INFINITY) {
+        object_warn((t_object *)x,
+                    "graf.traverse: no path from '%s' to '%s'",
+                    start->s_name, target->s_name);
+        return MAX_ERR_GENERIC;
+    }
+
+    /*
+     * Reconstruct the path: walk prev[] backward from target to start, then
+     * reverse in place so it reads start -> target. Length is bounded by n
+     * (a shortest path visits each node at most once).
+     */
+    long len = 0;
+    long cur = dst;
+    while (cur != -1 && len < n) {
+        x->path[len++] = g->nodes[cur].id;
+        if (cur == src) break;
+        cur = x->prev[cur];
+    }
+    for (i = 0; i < len / 2; i++) {
+        t_symbol *tmp        = x->path[i];
+        x->path[i]           = x->path[len - 1 - i];
+        x->path[len - 1 - i] = tmp;
+    }
+
+    x->path_len = len;
+    x->path_pos = 0;
+
+    post("graf.traverse '%s': dijkstra '%s' -> '%s' — %ld nodes, cost %.4f",
+         x->graf_name->s_name, start->s_name, target->s_name, len, x->dist[dst]);
+
+    return MAX_ERR_NONE;
+}
+
+
 ////////////////////////// Travel algorithms
 
 /**
@@ -748,8 +1018,34 @@ void graf_traverse_step_bfs(t_graf_traverse *x, t_graf *g)
     }
 }
 
-//TODO: implement Dijkstra's algorithm for weighted shortest path traversal
-//TODO: implement A* search for heuristic-guided traversal (requires user-provided heuristic function)
+/**
+ * graf_traverse_step_dijkstra — emit the next node of the precomputed path.
+ *
+ * Unlike DFS/BFS, no searching happens here: the full start->target path was
+ * computed in init (graf_traverse_compute_dijkstra). Each 'step' just walks one
+ * node forward along path[]. When the path is exhausted, bang done.
+ *
+ * This reuses the same left-outlet output as every other mode, so the existing
+ * [graf.traverse] -> [prepend goto] -> [graf] wiring highlights each node of the
+ * shortest path in graf.affiche as you step through it.
+ */
+void graf_traverse_step_dijkstra(t_graf_traverse *x, t_graf *g)
+{
+    if (x->path_pos >= x->path_len) {
+        x->done = 1;
+        outlet_bang(x->outlet_done);
+        return;
+    }
+
+    t_symbol *node_id = x->path[x->path_pos++];
+    x->current = node_id;
+    graf_traverse_output_node(x, g, node_id);
+}
+
+//TODO: implement A* search — Dijkstra plus an admissible heuristic h(n).
+//      Natural music heuristic: payload-based distance to target (e.g. pitch
+//      difference). Open question is the heuristic policy and whether it stays
+//      admissible w.r.t. how edge costs are defined.
 
 
 ////////////////////////// max messages handlers
@@ -778,9 +1074,10 @@ void graf_traverse_step(t_graf_traverse *x)
     if (!g) return;
 
     switch (x->mode) {
-        case GRAF_TRAVERSE_RANDOM: graf_traverse_step_random(x, g); break;
-        case GRAF_TRAVERSE_DFS:    graf_traverse_step_dfs(x, g);    break;
-        case GRAF_TRAVERSE_BFS:    graf_traverse_step_bfs(x, g);    break;
+        case GRAF_TRAVERSE_RANDOM:   graf_traverse_step_random(x, g);   break;
+        case GRAF_TRAVERSE_DFS:      graf_traverse_step_dfs(x, g);      break;
+        case GRAF_TRAVERSE_BFS:      graf_traverse_step_bfs(x, g);      break;
+        case GRAF_TRAVERSE_DIJKSTRA: graf_traverse_step_dijkstra(x, g); break;
         default:
             object_error((t_object *)x, "graf.traverse: internal error — unknown mode %d", x->mode);
     }
@@ -796,6 +1093,7 @@ void graf_traverse_step(t_graf_traverse *x)
  * Usage:
  *   reset            — restart from existing start
  *   reset a          — restart from node 'a', remember 'a' as start
+ *   reset a b        — restart from 'a' with shortest-path target 'b' (dijkstra)
  */
 void graf_traverse_reset(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -804,6 +1102,11 @@ void graf_traverse_reset(t_graf_traverse *x, t_symbol *s, long argc, t_atom *arg
     if (argc >= 1 && atom_gettype(argv) == A_SYM) {
         start_id = atom_getsym(argv);
         x->start = start_id;    // remember as default for future resets
+    }
+
+    /* Optional second symbol sets the shortest-path target (dijkstra). */
+    if (argc >= 2 && atom_gettype(argv + 1) == A_SYM) {
+        x->target = atom_getsym(argv + 1);
     }
 
     graf_traverse_init(x, start_id);
@@ -826,7 +1129,7 @@ void graf_traverse_mode(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv
 {
     if (argc < 1 || atom_gettype(argv) != A_SYM) {
         object_error((t_object *)x,
-                     "graf.traverse: mode requires one symbol argument: random, dfs, or bfs");
+                     "graf.traverse: mode requires one symbol argument: random, dfs, bfs, or dijkstra");
         return;
     }
 
@@ -838,12 +1141,13 @@ void graf_traverse_mode(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv
      * all symbols. gensym("dfs") always returns the same pointer address.
      * Java equivalent: mode_sym.equals("dfs") — but here by identity.
      */
-    if (mode_sym == gensym("random"))       new_mode = GRAF_TRAVERSE_RANDOM;
-    else if (mode_sym == gensym("dfs"))     new_mode = GRAF_TRAVERSE_DFS;
-    else if (mode_sym == gensym("bfs"))     new_mode = GRAF_TRAVERSE_BFS;
+    if (mode_sym == gensym("random"))         new_mode = GRAF_TRAVERSE_RANDOM;
+    else if (mode_sym == gensym("dfs"))       new_mode = GRAF_TRAVERSE_DFS;
+    else if (mode_sym == gensym("bfs"))       new_mode = GRAF_TRAVERSE_BFS;
+    else if (mode_sym == gensym("dijkstra"))  new_mode = GRAF_TRAVERSE_DIJKSTRA;
     else {
         object_error((t_object *)x,
-                     "graf.traverse: unknown mode '%s' — valid: random, dfs, bfs",
+                     "graf.traverse: unknown mode '%s' — valid: random, dfs, bfs, dijkstra",
                      mode_sym->s_name);
         return;
     }
@@ -865,6 +1169,20 @@ void graf_traverse_mode(t_graf_traverse *x, t_symbol *s, long argc, t_atom *argv
 void graf_traverse_from(t_graf_traverse *x, t_symbol *id)
 {
     x->start = id;
+}
+
+/**
+ * graf_traverse_to — set the shortest-path target node (dijkstra mode).
+ *
+ * Symmetric to 'from': 'from' sets where a traversal starts, 'to' sets where a
+ * shortest-path search should end. Has no effect on random/dfs/bfs, which have
+ * no notion of a destination. Takes effect on the next reset/step.
+ *
+ * Usage:  to b
+ */
+void graf_traverse_to(t_graf_traverse *x, t_symbol *id)
+{
+    x->target = id;
 }
 
 /**
