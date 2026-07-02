@@ -12,6 +12,7 @@
  * Helpers:
  *   - graf_find()           lookup a named graf instance (read)
  *   - graf_find_node()      lookup a node by id (read)
+ *   - graf_atom_to_id()     canonical atom -> node-id symbol conversion
  *   - graf_ensure_node()    find-or-create a node (write — used by graf.observe)
  *   - graf_increment_edge() add-or-increment an edge weight (write — graf.observe)
  *
@@ -28,6 +29,7 @@
 
 #include "ext.h"
 #include "ext_obex.h"
+#include <stdio.h>      /* snprintf — graf_atom_to_id */
 
 
 ////////////////////////// data structures
@@ -108,6 +110,53 @@ static inline t_graf_node *graf_find_node(t_graf *x, t_symbol *id)
 }
 
 
+////////////////////////// canonical id conversion
+
+/**
+ * graf_atom_to_id — convert ANY incoming atom to an interned node-id symbol.
+ *
+ * This is the ONE canonical conversion for the whole family. Node ids are
+ * always symbols internally, but users legitimately send numbers: message
+ * boxes type "removenode 0" as an int atom, MIDI pitches arrive as ints,
+ * pitch trackers emit floats. Max's typechecker even rejects int atoms
+ * outright on A_SYM-typed messages before the handler runs — which is why
+ * every id-taking message in graf.c is registered A_GIMME and parses
+ * through this helper instead.
+ *
+ * Formats deliberately match graf.c's CSV writer (graf_atom_to_str) and
+ * graf.observe's record conversion:
+ *   A_SYM   → passed through unchanged
+ *   A_LONG  → "%ld"   (60      → "60")
+ *   A_FLOAT → "%.10g" (0.5     → "0.5", 60.0 → "60")
+ * so a node created by [graf.observe] from the int 250, referenced from a
+ * message box as 250, and round-tripped through CSV as the token "250" all
+ * intern to the SAME t_symbol — pointer equality holds everywhere.
+ *
+ * Returns NULL for unhandled atom types; callers report the error with
+ * their own object context.
+ *
+ * Java analogy: a static factory NodeId.of(Object o) that canonicalises
+ * every input to one interned String representation.
+ */
+static inline t_symbol *graf_atom_to_id(const t_atom *a)
+{
+    char buf[64];
+
+    switch (atom_gettype(a)) {
+        case A_SYM:
+            return atom_getsym(a);
+        case A_LONG:
+            snprintf(buf, sizeof(buf), "%ld", (long)atom_getlong(a));
+            return gensym(buf);
+        case A_FLOAT:
+            snprintf(buf, sizeof(buf), "%.10g", (double)atom_getfloat(a));
+            return gensym(buf);
+        default:
+            return NULL;
+    }
+}
+
+
 ////////////////////////// inline mutation helpers (write)
 
 /**
@@ -175,13 +224,13 @@ static inline t_graf_node *graf_ensure_node(t_graf *g, t_symbol *id, long *creat
  *
  * Returns the NEW weight of the edge on success, or -1.0 on error
  * (missing node, or allocation failure). -1.0 is unambiguous as an error
- * sentinel here because observeed counts are always >= 0 — but note this
+ * sentinel here because observed counts are always >= 0 — but note this
  * helper is general: nothing stops a caller passing a negative amount,
  * in which case the sentinel would be ambiguous. graf.observe only ever
  * passes +1.0.
  *
  * This is THE core primitive of graf.observe: edge weight as raw transition
- * count. Counts (not probabilities) are stored so that observeing is additive
+ * count. Counts (not probabilities) are stored so that observing is additive
  * across sessions — record more material later and the counts just grow.
  *
  * Java analogy: edgeWeights.merge(v, amount, Double::sum).

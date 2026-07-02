@@ -20,6 +20,16 @@
         write [filename]           — save graph to CSV file (opens dialog if no filename)
         read  [filename]           — load graph from CSV file (opens dialog if no filename)
 
+    Node ids:
+        Ids are symbols internally, but every id-taking message ALSO accepts
+        ints and floats — they are canonicalised via graf_atom_to_id() in
+        graf.h ("%ld" / "%.10g", the same formats as the CSV writer and
+        graf.observe's record conversion). So "removenode 0" from a message
+        box, a node learned from the int 0 by graf.observe, and the CSV
+        token "0" all refer to the same node. These messages are registered
+        A_GIMME (not A_SYM) precisely so Max's typechecker does not reject
+        numeric atoms before the handler runs.
+
     CSV file format:
         # comment lines (leading # after optional whitespace)
         n, id [, payload...]        — node declaration
@@ -48,7 +58,7 @@
 
 #include "ext.h"
 #include "ext_obex.h"
-#include "graf.h"        /* t_graf_node, t_graf, graf_find_node(), graf_find() */
+#include "graf.h"        /* t_graf_node, t_graf, graf_find_node(), graf_find(), graf_atom_to_id() */
 #include <string.h>
 #include <stdlib.h>      /* strtol, strtod */
 
@@ -82,16 +92,18 @@ void *graf_new(t_symbol *s, long argc, t_atom *argv);
 void  graf_free(t_graf *x);
 void  graf_assist(t_graf *x, void *b, long m, long a, char *s);
 
-/* message handlers */
+/* message handlers
+   All id-taking handlers are A_GIMME so numeric ids are accepted —
+   see "Node ids" in the file header. */
 void  graf_bang(t_graf *x);
 void  graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv);
-void  graf_removenode(t_graf *x, t_symbol *id);
+void  graf_removenode(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv);
-void  graf_goto(t_graf *x, t_symbol *id);
+void  graf_goto(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_next(t_graf *x);
-void  graf_hasnode(t_graf *x, t_symbol *id);
-void  graf_neighbours(t_graf *x, t_symbol *id);
+void  graf_hasnode(t_graf *x, t_symbol *s, long argc, t_atom *argv);
+void  graf_neighbours(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_size(t_graf *x);
 void  graf_print(t_graf *x);
@@ -143,19 +155,24 @@ void ext_main(void *r)
     /* output current node */
     class_addmethod(c, (method)graf_bang,        "bang",        0);
 
-    /* graph structure */
+    /* graph structure.
+       Id-taking messages are A_GIMME (not A_SYM): the Max typechecker
+       rejects int atoms on A_SYM messages before the handler even runs,
+       which made numeric node ids (e.g. those learned by graf.observe)
+       unreachable from message boxes. A_GIMME lets the handler accept
+       symbols, ints, and floats via graf_atom_to_id(). */
     class_addmethod(c, (method)graf_addnode,     "addnode",     A_GIMME, 0);
-    class_addmethod(c, (method)graf_removenode,  "removenode",  A_SYM,   0);
+    class_addmethod(c, (method)graf_removenode,  "removenode",  A_GIMME, 0);
     class_addmethod(c, (method)graf_addedge,     "addedge",     A_GIMME, 0);
     class_addmethod(c, (method)graf_removeedge,  "removeedge",  A_GIMME, 0);
 
     /* traversal */
-    class_addmethod(c, (method)graf_goto,        "goto",        A_SYM,   0);
+    class_addmethod(c, (method)graf_goto,        "goto",        A_GIMME, 0);
     class_addmethod(c, (method)graf_next,        "next",        0);
 
     /* queries */
-    class_addmethod(c, (method)graf_hasnode,     "hasnode",     A_SYM,   0);
-    class_addmethod(c, (method)graf_neighbours,  "neighbours",  A_SYM,   0);
+    class_addmethod(c, (method)graf_hasnode,     "hasnode",     A_GIMME, 0);
+    class_addmethod(c, (method)graf_neighbours,  "neighbours",  A_GIMME, 0);
     class_addmethod(c, (method)graf_adjacent,    "adjacent",    A_GIMME, 0);
     class_addmethod(c, (method)graf_size,        "size",        0);
     class_addmethod(c, (method)graf_print,       "print",       0);
@@ -335,6 +352,9 @@ static void graf_sysfile_write_str(t_filehandle fh, const char *str)
  *   A_FLOAT → decimal, e.g. "0.5" — %.10g preserves round-trip precision
  *             without unnecessary trailing zeros
  *   A_SYM   → raw symbol name, e.g. "foo"
+ *
+ * These formats are the SAME as graf_atom_to_id() in graf.h — node ids
+ * round-trip identically through message boxes, graf.observe, and CSV.
  *
  * Limitation: symbol values containing commas or whitespace will break
  * the CSV parser on read. Avoid commas and leading/trailing spaces in
@@ -664,6 +684,8 @@ void graf_bang(t_graf *x)
  *
  * Add a node. ID auto-increments if omitted. Any additional arguments
  * become the node's payload (ints, floats, or symbols — any Max atoms).
+ * Numeric ids are canonicalised via graf_atom_to_id() (this also fixes
+ * the old behaviour where a float id was silently truncated to an int).
  *
  * Notifies subscribers on success so graf.affiche redraws.
  *
@@ -671,6 +693,7 @@ void graf_bang(t_graf *x)
  *   addnode              → node0 (no payload)
  *   addnode foo          → foo (no payload)
  *   addnode foo 60 0.5   → foo with payload [60, 0.5]
+ *   addnode 60 0.5 127   → node "60" with payload [0.5, 127]
  */
 void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
@@ -682,13 +705,11 @@ void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
                  GRAF_AUTO_NODE_PREFIX, x->next_node_id++);
         id = gensym(auto_id);
     } else {
-        if (atom_gettype(argv) == A_SYM) {
-            id = atom_getsym(argv);
-        } else {
-            /* numeric id: convert to symbol so pointer equality still works */
-            char id_str[64];
-            snprintf(id_str, sizeof(id_str), "%ld", atom_getlong(argv));
-            id = gensym(id_str);
+        id = graf_atom_to_id(argv);
+        if (!id) {
+            object_error((t_object *)x,
+                         "addnode: id must be a symbol, int, or float");
+            return;
         }
     }
 
@@ -710,10 +731,25 @@ void graf_addnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  *   3. Shift the nodes array to fill the gap
  *   4. Clear current pointer if it was pointing to this node
  *
+ * A_GIMME so numeric ids work: "removenode 0" from a message box sends
+ * an int atom, which an A_SYM registration would have rejected outright.
+ *
  * Notifies subscribers on success.
  */
-void graf_removenode(t_graf *x, t_symbol *id)
+void graf_removenode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
+    if (argc < 1) {
+        object_error((t_object *)x, "removenode: requires a node id");
+        return;
+    }
+
+    t_symbol *id = graf_atom_to_id(argv);
+    if (!id) {
+        object_error((t_object *)x,
+                     "removenode: id must be a symbol, int, or float");
+        return;
+    }
+
     long idx = graf_find_node_index(x, id);
     if (idx < 0) {
         object_error((t_object *)x,
@@ -761,6 +797,9 @@ void graf_removenode(t_graf *x, t_symbol *id)
  *
  * Add a directed edge u→v. Weight defaults to 0.0.
  * Both nodes must already exist. Duplicate edges are rejected.
+ * Numeric ids accepted ("addedge 60 64 1." works on nodes "60" and "64" —
+ * the old atom_getsym parsing silently produced the empty symbol for
+ * numeric atoms, so such edges could never be created from message boxes).
  *
  * Notifies subscribers on success.
  */
@@ -772,9 +811,15 @@ void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
 
-    t_symbol *u      = atom_getsym(argv);
-    t_symbol *v      = atom_getsym(argv + 1);
-    double    weight = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
+    t_symbol *u = graf_atom_to_id(argv);
+    t_symbol *v = graf_atom_to_id(argv + 1);
+    if (!u || !v) {
+        object_error((t_object *)x,
+                     "addedge: ids must be symbols, ints, or floats");
+        return;
+    }
+
+    double weight = (argc >= 3) ? atom_getfloat(argv + 2) : 0.0;
 
     if (graf_addedge_quiet(x, u, v, weight) == 0) {
         post("graf: added edge '%s' -> '%s' (weight: %.2f)",
@@ -787,6 +832,7 @@ void graf_addedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  * removeedge <u> <v>
  *
  * Remove the directed edge u→v only (not v→u).
+ * Numeric ids accepted.
  * Notifies subscribers on success.
  */
 void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
@@ -797,8 +843,13 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
 
-    t_symbol *u = atom_getsym(argv);
-    t_symbol *v = atom_getsym(argv + 1);
+    t_symbol *u = graf_atom_to_id(argv);
+    t_symbol *v = graf_atom_to_id(argv + 1);
+    if (!u || !v) {
+        object_error((t_object *)x,
+                     "removeedge: ids must be symbols, ints, or floats");
+        return;
+    }
 
     t_graf_node *src = graf_find_node(x, u);
     if (!src) {
@@ -832,13 +883,27 @@ void graf_removeedge(t_graf *x, t_symbol *s, long argc, t_atom *argv)
  * Set the current traversal position to the specified node.
  * Direct jump — edges are ignored, any node can be reached.
  * After this, bang outputs that node's id and payload.
+ * Numeric ids accepted — so [prepend goto] fed with numeric node output
+ * (e.g. from a graph learned by graf.observe) highlights correctly.
  *
  * Notifies subscribers so graf.affiche highlights the new current node.
  * This is also the hook used in the [prepend goto] → [graf] patcher pattern
  * that connects graf.traverse output to graf.affiche highlighting.
  */
-void graf_goto(t_graf *x, t_symbol *id)
+void graf_goto(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
+    if (argc < 1) {
+        object_error((t_object *)x, "goto: requires a node id");
+        return;
+    }
+
+    t_symbol *id = graf_atom_to_id(argv);
+    if (!id) {
+        object_error((t_object *)x,
+                     "goto: id must be a symbol, int, or float");
+        return;
+    }
+
     if (!graf_find_node(x, id)) {
         object_error((t_object *)x, "goto: node '%s' not found", id->s_name);
         return;
@@ -891,12 +956,24 @@ void graf_next(t_graf *x)
 /**
  * hasnode <id>
  *
- * Output "hasnode 1" or "hasnode 0".
+ * Output "hasnode 1" or "hasnode 0". Numeric ids accepted.
  * Equivalent to IGraph.hasVertice() in Java.
  * Query only — no notify.
  */
-void graf_hasnode(t_graf *x, t_symbol *id)
+void graf_hasnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
+    if (argc < 1) {
+        object_error((t_object *)x, "hasnode: requires a node id");
+        return;
+    }
+
+    t_symbol *id = graf_atom_to_id(argv);
+    if (!id) {
+        object_error((t_object *)x,
+                     "hasnode: id must be a symbol, int, or float");
+        return;
+    }
+
     t_atom result;
     atom_setlong(&result, graf_find_node(x, id) ? 1 : 0);
     outlet_anything(x->outlet, gensym("hasnode"), 1, &result);
@@ -906,11 +983,24 @@ void graf_hasnode(t_graf *x, t_symbol *id)
  * neighbours <id>
  *
  * Output each outgoing neighbour as a separate "neighbour <id>" message.
+ * Numeric ids accepted.
  * Equivalent to IGraph.neighbours() in Java.
  * Query only — no notify.
  */
-void graf_neighbours(t_graf *x, t_symbol *id)
+void graf_neighbours(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
+    if (argc < 1) {
+        object_error((t_object *)x, "neighbours: requires a node id");
+        return;
+    }
+
+    t_symbol *id = graf_atom_to_id(argv);
+    if (!id) {
+        object_error((t_object *)x,
+                     "neighbours: id must be a symbol, int, or float");
+        return;
+    }
+
     t_graf_node *n = graf_find_node(x, id);
     if (!n) {
         object_error((t_object *)x,
@@ -935,6 +1025,7 @@ void graf_neighbours(t_graf *x, t_symbol *id)
  * adjacent <u> <v>
  *
  * Output "adjacent 1" if directed edge u→v exists, "adjacent 0" otherwise.
+ * Numeric ids accepted.
  * Equivalent to IGraph.adjacent() in Java.
  * Query only — no notify.
  */
@@ -945,8 +1036,13 @@ void graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
 
-    t_symbol *u = atom_getsym(argv);
-    t_symbol *v = atom_getsym(argv + 1);
+    t_symbol *u = graf_atom_to_id(argv);
+    t_symbol *v = graf_atom_to_id(argv + 1);
+    if (!u || !v) {
+        object_error((t_object *)x,
+                     "adjacent: ids must be symbols, ints, or floats");
+        return;
+    }
 
     t_graf_node *src = graf_find_node(x, u);
     if (!src) {
