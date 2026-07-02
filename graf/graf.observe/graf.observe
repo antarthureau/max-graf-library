@@ -1,10 +1,10 @@
 /**
- * graf_observe.c — Markov transition observeer writing into named [graf] instances.
+ * graf_observe.c — Markov transition observer writing into named [graf] instances.
  *
  * Part of the graf external family for Max/MSP.
  * Listens to a stream of symbols (or numbers) and records the observed
  * transitions as edge weights in a [graf] object identified by name.
- * Weights are RAW COUNTS, not probabilities — observeing is additive:
+ * Weights are RAW COUNTS, not probabilities — observing is additive:
  * record more material later (or in a later session, after read) and the
  * counts simply keep growing.
  *
@@ -18,7 +18,7 @@
  *                          are used as node ids directly; ints/floats are
  *                          stringified ("60", "0.5") — handy for MIDI pitches.
  *   order <n>              set the Markov order (1..8). Clears the context
- *                          window. Nodes already observeed at another order
+ *                          window. Nodes already observed at another order
  *                          remain in the graph untouched.
  *   forget                 clear the context window WITHOUT touching the
  *                          graph — use at phrase boundaries so the last note
@@ -31,7 +31,7 @@
  *                          shortest path is then the MOST PROBABLE path.
  *                          Counts are destroyed; recording afterwards mixes
  *                          scales (a warning is posted).
- *   bang                   post observeer state (order, context) to the console.
+ *   bang                   post observer state (order, context) to the console.
  *
  * OUTLETS
  *   0 (left)  — transition update after each recorded transition:
@@ -41,7 +41,7 @@
  * -------------------------------------------------------------------------
  * MARKOV ORDER AND NODE IDENTITY
  *
- * Order 1: node ids are the recorded symbols themselves. observeing writes
+ * Order 1: node ids are the recorded symbols themselves. observing writes
  * into exactly the same namespace as hand-built graphs — you can record on
  * top of a graph you drew by hand, and the counts merge.
  *
@@ -55,16 +55,16 @@
  * WEIGHT SEMANTICS BRIDGE (why 'normalize cost' exists)
  *
  * In the weighted random walk, weight = likelihood (higher = more probable).
- * In Dijkstra, weight = cost (lower = better). Storing observeed weights as
+ * In Dijkstra, weight = cost (lower = better). Storing observed weights as
  * -log(p) converts products of probabilities into sums of costs:
  *     argmax  p1*p2*...*pn  ==  argmin  -log(p1) + ... + -log(pn)
  * so Dijkstra's shortest path over 'normalize cost' weights is the most
- * probable path through the observeed model.
+ * probable path through the observed model.
  *
  * -------------------------------------------------------------------------
  * C / JAVA MAPPING
  *
- * The observeer parallels a MarkovCounter class in Java:
+ * The observer parallels a MarkovCounter class in Java:
  *
  *   class MarkovCounter {
  *       Deque<String> window;              // sliding context, size = order
@@ -91,10 +91,10 @@
 //////////////////////////////////////////////////////////////////////////
 // Constants
 
-#define GRAF_observe_MAX_ORDER    8       // sanity ceiling for the Markov order
-#define GRAF_observe_KEY_LEN      512     // max length of a composite k-gram id
-#define GRAF_observe_SEP          "|"     // k-gram id separator (CSV-safe: no comma/space)
-#define GRAF_observe_MIN_PROB     1e-9    // clamp for -log(p) so cost stays finite
+#define GRAF_OBSERVE_MAX_ORDER    8       // sanity ceiling for the Markov order
+#define GRAF_OBSERVE_KEY_LEN      512     // max length of a composite k-gram id
+#define GRAF_OBSERVE_SEP          "|"     // k-gram id separator (CSV-safe: no comma/space)
+#define GRAF_OBSERVE_MIN_PROB     1e-9    // clamp for -log(p) so cost stays finite
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -103,9 +103,9 @@
 /**
  * t_graf_observe — state for one graf.observe instance.
  *
- * The only state the observeer itself owns is the sliding context window;
- * all observeed data lives in the target t_graf. This means the observeer is
- * fully disposable — delete and recreate it and nothing observeed is lost.
+ * The only state the observer itself owns is the sliding context window;
+ * all observed data lives in the target t_graf. This means the observer is
+ * fully disposable — delete and recreate it and nothing observed is lost.
  */
 typedef struct _graf_observe {
     t_object    ob;
@@ -212,10 +212,10 @@ void *graf_observe_new(t_symbol *s, long argc, t_atom *argv)
     x->order = 1;
     if (argc >= 2 && atom_gettype(argv + 1) == A_LONG) {
         long n = atom_getlong(argv + 1);
-        if (n < 1 || n > GRAF_observe_MAX_ORDER) {
+        if (n < 1 || n > GRAF_OBSERVE_MAX_ORDER) {
             object_warn((t_object *)x,
                         "graf.observe: order %ld out of range (1..%d) — using 1",
-                        n, GRAF_observe_MAX_ORDER);
+                        n, GRAF_OBSERVE_MAX_ORDER);
         } else {
             x->order = n;
         }
@@ -319,8 +319,8 @@ static t_symbol *graf_observe_atom_to_sym(t_graf_observe *x, const t_atom *a)
  * Order 1: the window's single symbol IS the id — returned directly,
  * no string work, no new symbol interned.
  *
- * Order k: symbols joined with GRAF_observe_SEP into buf, then interned.
- * Truncation (id longer than GRAF_observe_KEY_LEN) is warned once per call —
+ * Order k: symbols joined with GRAF_OBSERVE_SEP into buf, then interned.
+ * Truncation (id longer than GRAF_OBSERVE_KEY_LEN) is warned once per call —
  * with 8 symbols max this only happens with pathological id lengths.
  *
  * Java analogy: String.join("|", window).intern()
@@ -335,12 +335,12 @@ static t_symbol *graf_observe_window_key(t_graf_observe *x, char *buf, long bufl
     buf[0] = '\0';
     for (i = 0; i < x->order; i++) {
         int written = snprintf(buf + pos, (size_t)(buflen - pos), "%s%s",
-                               (i > 0) ? GRAF_observe_SEP : "",
+                               (i > 0) ? GRAF_OBSERVE_SEP : "",
                                x->window[i]->s_name);
         if (written < 0 || pos + written >= buflen) {
             object_warn((t_object *)x,
                         "record: composite node id truncated (> %d chars)",
-                        GRAF_observe_KEY_LEN);
+                        GRAF_OBSERVE_KEY_LEN);
             pos = buflen - 1;
             break;
         }
@@ -351,7 +351,7 @@ static t_symbol *graf_observe_window_key(t_graf_observe *x, char *buf, long bufl
 }
 
 /**
- * Record a single value: the core observeing step.
+ * Record a single value: the core observing step.
  *
  * Two phases of life:
  *
@@ -372,7 +372,7 @@ static t_symbol *graf_observe_window_key(t_graf_observe *x, char *buf, long bufl
  */
 static void graf_observe_record_one(t_graf_observe *x, t_graf *g, t_symbol *id)
 {
-    char      keybuf[GRAF_observe_KEY_LEN];
+    char      keybuf[GRAF_OBSERVE_KEY_LEN];
     t_symbol *prev_key = NULL;
     t_symbol *new_key  = NULL;
     long      created  = 0;
@@ -384,7 +384,7 @@ static void graf_observe_record_one(t_graf_observe *x, t_graf *g, t_symbol *id)
 
         if (x->window_count == x->order) {
             /* window just became full: create the initial state node */
-            new_key = graf_observe_window_key(x, keybuf, GRAF_observe_KEY_LEN);
+            new_key = graf_observe_window_key(x, keybuf, GRAF_OBSERVE_KEY_LEN);
             if (!graf_ensure_node(g, new_key, &created)) {
                 object_error((t_object *)x, "record: out of memory");
                 return;
@@ -398,7 +398,7 @@ static void graf_observe_record_one(t_graf_observe *x, t_graf *g, t_symbol *id)
     }
 
     /* phase 2 — full window: previous state -> new state transition */
-    prev_key = graf_observe_window_key(x, keybuf, GRAF_observe_KEY_LEN);
+    prev_key = graf_observe_window_key(x, keybuf, GRAF_OBSERVE_KEY_LEN);
 
     /* slide: drop oldest, append newest */
     for (i = 1; i < x->order; i++)
@@ -406,8 +406,8 @@ static void graf_observe_record_one(t_graf_observe *x, t_graf *g, t_symbol *id)
     x->window[x->order - 1] = id;
 
     {
-        char keybuf2[GRAF_observe_KEY_LEN];
-        new_key = graf_observe_window_key(x, keybuf2, GRAF_observe_KEY_LEN);
+        char keybuf2[GRAF_OBSERVE_KEY_LEN];
+        new_key = graf_observe_window_key(x, keybuf2, GRAF_OBSERVE_KEY_LEN);
     }
 
     /* ensure both endpoints exist. prev normally already does (it was
@@ -480,7 +480,7 @@ void graf_observe_record(t_graf_observe *x, t_symbol *s, long argc, t_atom *argv
  * order <n>
  *
  * Set the Markov order. Clears the context window (states of different
- * lengths are incomparable). Does NOT touch the graph: nodes observeed at
+ * lengths are incomparable). Does NOT touch the graph: nodes observed at
  * a different order simply coexist — 1-gram node "a" and 2-gram node "a|b"
  * are distinct symbols and never collide.
  */
@@ -488,9 +488,9 @@ void graf_observe_order(t_graf_observe *x, long n)
 {
     t_symbol **grown;
 
-    if (n < 1 || n > GRAF_observe_MAX_ORDER) {
+    if (n < 1 || n > GRAF_OBSERVE_MAX_ORDER) {
         object_error((t_object *)x,
-                     "order: %ld out of range (1..%d)", n, GRAF_observe_MAX_ORDER);
+                     "order: %ld out of range (1..%d)", n, GRAF_OBSERVE_MAX_ORDER);
         return;
     }
     if (n == x->order) return;
@@ -532,13 +532,13 @@ void graf_observe_forget(t_graf_observe *x)
  *
  *   cost: each outgoing weight becomes -log(p) with p as above.
  *     Ready for [graf.traverse] mode dijkstra: shortest path over these
- *     costs == most probable path through the observeed model. p is clamped
- *     to GRAF_observe_MIN_PROB so hand-added zero-weight edges get a large
+ *     costs == most probable path through the observed model. p is clamped
+ *     to GRAF_OBSERVE_MIN_PROB so hand-added zero-weight edges get a large
  *     finite cost instead of infinity.
  *
  * Counts are destroyed either way — recording after normalize mixes count
  * and probability/cost scales in the same graph, which is meaningless.
- * A warning says so. If you need to keep observeing, 'write' the counts to
+ * A warning says so. If you need to keep observing, 'write' the counts to
  * CSV first and normalize a copy.
  *
  * Nodes with no outgoing edges, or an all-zero outgoing sum, are skipped.
@@ -575,7 +575,7 @@ void graf_observe_normalize(t_graf_observe *x, t_symbol *mode)
         for (j = 0; j < n->edge_count; j++) {
             double p = n->edge_weights[j] / sum;
             if (as_cost) {
-                if (p < GRAF_observe_MIN_PROB) p = GRAF_observe_MIN_PROB;
+                if (p < GRAF_OBSERVE_MIN_PROB) p = GRAF_OBSERVE_MIN_PROB;
                 n->edge_weights[j] = -log(p);
             } else {
                 n->edge_weights[j] = p;
@@ -595,11 +595,11 @@ void graf_observe_normalize(t_graf_observe *x, t_symbol *mode)
 }
 
 /**
- * bang — post observeer state to the console (debugging aid).
+ * bang — post observer state to the console (debugging aid).
  */
 void graf_observe_bang(t_graf_observe *x)
 {
-    char ctx[GRAF_observe_KEY_LEN] = "";
+    char ctx[GRAF_OBSERVE_KEY_LEN] = "";
     long i, pos = 0;
 
     for (i = 0; i < x->window_count; i++) {
