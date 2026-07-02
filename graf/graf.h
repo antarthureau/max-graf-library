@@ -3,11 +3,25 @@
  * Shared header for the graf external family.
  *
  * Include this in every graf.* external. Defines the canonical data structures
- * and provides two static inline lookup helpers that are compiled once per
- * translation unit (avoiding linker collisions across externals).
+ * and provides static inline helpers that are compiled once per translation
+ * unit (avoiding linker collisions across externals).
  *
  * Java analogy: this is like a shared interface/model package that both the
  * data-store class (graf) and its view class (graf.affiche) import.
+ *
+ * Helpers:
+ *   - graf_find()           lookup a named graf instance (read)
+ *   - graf_find_node()      lookup a node by id (read)
+ *   - graf_ensure_node()    find-or-create a node (write — used by graf.observe)
+ *   - graf_increment_edge() add-or-increment an edge weight (write — graf.observe)
+ *
+ * The write helpers exist because graf.c's internal mutation functions
+ * (graf_addnode_quiet, graf_addedge_quiet) are `static` — private to the
+ * graf external's binary. Other externals in the family cannot link to
+ * them, so the minimal shared mutation surface lives here instead.
+ * NOTE: graf.c currently keeps its own private copies of this logic; the
+ * two must stay behaviourally identical (future refactor: make graf.c call
+ * these helpers too).
  */
 
 #pragma once
@@ -58,7 +72,7 @@ typedef struct _graf {
 } t_graf;
 
 
-////////////////////////// inline lookup helpers
+////////////////////////// inline lookup helpers (read)
 
 /**
  * Find a named graf instance in the Max object registry.
@@ -91,4 +105,124 @@ static inline t_graf_node *graf_find_node(t_graf *x, t_symbol *id)
             return &x->nodes[i];
     }
     return NULL;
+}
+
+
+////////////////////////// inline mutation helpers (write)
+
+/**
+ * graf_ensure_node — find a node by id, creating it (payload-free) if absent.
+ *
+ * g       — target graf instance
+ * id      — interned node id
+ * created — optional out-parameter: set to 1 if the node was newly created,
+ *           0 if it already existed. Pass NULL if you don't care.
+ *
+ * Returns a pointer to the node, or NULL on allocation failure.
+ *
+ * IMPORTANT: the returned pointer points into g->nodes[] and is INVALIDATED
+ * by any subsequent node insertion (the array may be reallocated and move).
+ * Use the pointer immediately or re-look-up by id. This is the classic C
+ * dynamic-array pitfall — Java references never move, C pointers into a
+ * resizable array do.
+ *
+ * Growth strategy mirrors graf.c's graf_ensure_capacity: capacity doubles,
+ * starting from 16 if the array was never allocated.
+ *
+ * Java analogy: Map.computeIfAbsent(id, k -> new Node(k)).
+ */
+static inline t_graf_node *graf_ensure_node(t_graf *g, t_symbol *id, long *created)
+{
+    t_graf_node *n = graf_find_node(g, id);
+
+    if (created) *created = 0;
+    if (n) return n;
+
+    /* grow the nodes array if needed (double, like Java ArrayList) */
+    if (g->node_count >= g->node_capacity) {
+        long newcap = (g->node_capacity > 0) ? g->node_capacity * 2 : 16;
+        t_graf_node *grown;
+
+        if (g->nodes == NULL)
+            grown = (t_graf_node *)sysmem_newptr(newcap * sizeof(t_graf_node));
+        else
+            grown = (t_graf_node *)sysmem_resizeptr(g->nodes,
+                                                    newcap * sizeof(t_graf_node));
+        if (!grown) return NULL;
+
+        g->nodes         = grown;
+        g->node_capacity = newcap;
+    }
+
+    n                = &g->nodes[g->node_count];
+    n->id            = id;
+    n->payload       = NULL;
+    n->payload_count = 0;
+    n->edges_to      = NULL;    /* allocated lazily on first edge */
+    n->edge_weights  = NULL;
+    n->edge_count    = 0;
+
+    g->node_count++;
+    if (created) *created = 1;
+    return n;
+}
+
+/**
+ * graf_increment_edge — add `amount` to the weight of edge u->v,
+ * creating the edge (initial weight = amount) if it does not exist.
+ *
+ * Both u and v must already exist as nodes (call graf_ensure_node first).
+ *
+ * Returns the NEW weight of the edge on success, or -1.0 on error
+ * (missing node, or allocation failure). -1.0 is unambiguous as an error
+ * sentinel here because observeed counts are always >= 0 — but note this
+ * helper is general: nothing stops a caller passing a negative amount,
+ * in which case the sentinel would be ambiguous. graf.observe only ever
+ * passes +1.0.
+ *
+ * This is THE core primitive of graf.observe: edge weight as raw transition
+ * count. Counts (not probabilities) are stored so that observeing is additive
+ * across sessions — record more material later and the counts just grow.
+ *
+ * Java analogy: edgeWeights.merge(v, amount, Double::sum).
+ */
+static inline double graf_increment_edge(t_graf *g, t_symbol *u,
+                                         t_symbol *v, double amount)
+{
+    t_graf_node *src = graf_find_node(g, u);
+    t_graf_node *dst = graf_find_node(g, v);
+    long i;
+
+    if (!src || !dst) return -1.0;
+
+    /* existing edge — just accumulate */
+    for (i = 0; i < src->edge_count; i++) {
+        if (src->edges_to[i] == v) {
+            src->edge_weights[i] += amount;
+            return src->edge_weights[i];
+        }
+    }
+
+    /* new edge — grow the parallel arrays (mirrors graf_addedge_quiet) */
+    {
+        long new_count = src->edge_count + 1;
+
+        if (src->edges_to == NULL) {
+            src->edges_to     = (t_symbol **)sysmem_newptr(
+                                 new_count * sizeof(t_symbol *));
+            src->edge_weights = (double *)   sysmem_newptr(
+                                 new_count * sizeof(double));
+        } else {
+            src->edges_to     = (t_symbol **)sysmem_resizeptr(
+                                 src->edges_to, new_count * sizeof(t_symbol *));
+            src->edge_weights = (double *)   sysmem_resizeptr(
+                                 src->edge_weights, new_count * sizeof(double));
+        }
+        if (!src->edges_to || !src->edge_weights) return -1.0;
+
+        src->edges_to[src->edge_count]     = v;
+        src->edge_weights[src->edge_count] = amount;
+        src->edge_count++;
+        return amount;
+    }
 }
