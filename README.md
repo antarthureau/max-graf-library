@@ -22,22 +22,23 @@ Max has no native graph data structure, and often I find myself needing one! Tha
 A graf instance is a directed weighted graph G = (V, R):
 
 V is a set of uniquely named nodes (=vertices). Each node may carry an optional
-payload — arbitrary Max atoms (pitch, duration, velocity, or anything
+payload (arbitrary Max atoms for pitch, duration, velocity, or anything
 else) attached to that state.
 
-R ⊆ V × V × ℝ is the set of directed, weighted edges between nodes —
+R ⊆ V × V × ℝ is the set of directed, weighted edges between nodes,
 the possible transitions and their relative weight.
 
 The weight of an edge means different things depending on how the graph is
 traversed: in a random walk, higher weight means more probable; in
-shortest-path search, lower weight means lower cost. Both readings operate
+shortest-path search (Dijkstra), lower weight means lower cost.
+Both readings operate
 on the same underlying structure.
 
 -----
 
 ## The object family
 
-### graf — the data store
+### [graf] - the data structure
 
 Holds the graph itself: nodes, edges, weights, payloads. Every other
 object in the family reads a named `graf` instance by reference rather
@@ -63,20 +64,20 @@ one graph.
 `[graf my_graph]` registers under a name other objects can find it by.
 `[graf]` with no argument still works, auto-named `graf_0`, `graf_1`, ...
 
-### graf.traverse — navigation engine
+### [graf.traverse] - a navigation engine
 
 Walks a named `graf` instance step by step, without modifying it. The
-graph and the traversal over it are separate objects on purpose — several
+graph and the traversal over it are separate objects on purpose- several
 traversers can move over the same graph independently and at the same time.
 A traverser can target a different destination than another one searching the same
 graph.
 
     step                  advance one step; new node id on the left outlet
     reset [<id> [<tgt>]]  reset the traversal; optional start and target
-    mode random           weighted random walk (default) — weight = likelihood
+    mode random           weighted random walk (default). weight = likelihood
     mode dfs              depth-first
     mode bfs              breadth-first
-    mode dijkstra         shortest weighted path to a target — weight = cost
+    mode dijkstra         shortest weighted path to a target- weight = cost
     from <id>             set the start node for future resets
     to <id>               set the target node for shortest-path search
     bang                  re-output the current node without advancing
@@ -84,7 +85,7 @@ graph.
 Left outlet emits each node as it's visited; right outlet bangs when the
 traversal completes or hits a dead end.
 
-### graf.affiche — visualizer
+### [graf.affiche] - a graf visualizer
 
 Draws a named `graf` instance live inside the patcher: nodes as circles,
 edges as directed arrows labelled with their weight, current position
@@ -93,10 +94,10 @@ highlighted. Redraws automatically whenever the graph changes.
     bang            force an immediate redraw
     update <name>   switch to watching a different named graf instance
 
-### graf.observe — transition learner
+### [graf.observe] - transition learner, graf builder
 
 Listens to a stream of values and writes into a named
-`graf` instance as raw transition counts — nodes and edges appear as
+`graf` instance as raw transition counts- nodes and edges appear as
 they're observed, rather than being hand-built. Useful for building a
 graph from recorded or live material (pitch tracking, an existing
 sequence, anything that can be reduced to a stream of symbols).
@@ -112,7 +113,7 @@ sequence, anything that can be reduced to a stream of symbols).
                             the next)
     normalize [prob|cost]   convert accumulated counts into probabilities, or
                             into Dijkstra-compatible costs (cost = -log(p)).
-                            Destructive — do this once learning is finished.
+                            Destructive- do this once learning is finished.
     bang                     post current state to the console
 
 Left outlet emits `<from> <to> <count>` for each transition observed;
@@ -125,9 +126,9 @@ convert into weights `graf.traverse` can use directly.
 
 ## Example
 
-    [graf my_graph]              — the data store
-    [graf.traverse my_graph]     — walks it
-    [graf.affiche my_graph]      — shows it
+    [graf my_graph]             - the data store
+    [graf.traverse my_graph]    - walks it
+    [graf.affiche my_graph]     - shows it
 
 Build a small graph, either by sending messages or loading a CSV:
 
@@ -143,11 +144,11 @@ from a to c instead.
 
 ## File format
 
-Graphs save and load as plain CSV — readable, diffable, and easy to
+Graphs save and load as plain CSV- readable, diffable, and easy to
 generate from other tools (a Python script, a spreadsheet, another
 program's output). n declares a node/vertex, e declares an edge
 
-    # graf CSV — graph data file
+    # graf CSV- graph data file
     # nodes: n, id [, payload...]
     # edges: e, from, to [, weight]
     n, a
@@ -191,7 +192,7 @@ Requires the Cycling '74 Max SDK and CMake.
 `install.sh` copies the built externals into your Max packages folder.
 The SDK must live on a path without spaces (OneDrive-style synced folders
 will break the build). Detailed setup and troubleshooting notes can be
-split out into a separate BUILDING.md if that would be useful — just ask.
+split out into a separate BUILDING.md if that would be useful- just ask.
 
 -----
 
