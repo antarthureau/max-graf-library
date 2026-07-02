@@ -1,5 +1,7 @@
 /**
+ * @file graf_observe.c
  * graf_observe.c — Markov transition observer writing into named [graf] instances.
+ * antoine hureau-parreira
  *
  * Part of the graf external family for Max/MSP.
  * Listens to a stream of symbols (or numbers) and records the observed
