@@ -6,3 +6,4 @@
 add_subdirectory(graf)
 add_subdirectory(graf.traverse)
 add_subdirectory(graf.affiche)
+add_subdirectory(graf.observe)
