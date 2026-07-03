@@ -162,18 +162,24 @@ program's output). n declares a node/vertex, e declares an edge
 
 ## Status
 
-Under active development. `graf`, `graf.traverse` (random walk, DFS,
-BFS, Dijkstra), `graf.affiche`, and `graf.observe` are all implemented
-and working. Remaining before a first release: a visual rework of
-`graf.affiche` (force-directed layout, zoom/pan, node dragging), a
-duplicate-instance-name crash, and packaging/docs. A* search and further
-structural operators (`graf.op`, `graf.info`, `graf.path`) are planned
-after that. I will consider a Pure Data port once the basic Max version is stable, but you are welcome to work on it if inspired! :)
+The project is under active development, with many things on the to-do list! `graf`, `graf.traverse` (random walk, DFS,
+BFS, Dijkstra), `graf.affiche`, and `graf.observe` are all implemented and working
+at this point. I plan to look at a visual rework of `graf.affiche` (several layouts,
+zoom/pan, node dragging maybe) and packaging/docs/examples/helpfiles. In
+`graf.traverse` the next thing is to implement A* search and possibly other
+navigation parameters. I also have to take a step back and look at how to tackle
+the weight/value of edges and how to toggle between a normalized weight and an
+absolute weight, and how they subsequently act as a cost or a higher probability
+in navigation algorithms. In addition, a good structure for node's payloads and how to use them.
 
-Known limitations at this stage: creating two named `[graf]` instances
-that share a name across patches can and will crash Max; `[graf.affiche]` doesn't
- pick up its instance name at construction and needs a manual
-`update <name>` message; in addition, the circular layout of `[graf.affiche]` quickly becomes hard to read, so this is a priority in my to-do list.
+I will consider a Pure Data port once the basic Max version is stable, but you are
+welcome to work on it if inspired! :)
+
+Known bugs at this stage: creating two named `[graf]` instances that share a name
+across patches can and will crash Max; `[graf.affiche]` doesn't pick up its
+instance name at construction and needs a manual `update <name>` message; in
+addition, the circular layout of `[graf.affiche]` quickly becomes hard to read,
+so this is a priority on my to-do list.
 
 -----
 
