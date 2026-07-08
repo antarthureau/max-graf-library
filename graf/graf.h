@@ -46,11 +46,11 @@
  * This is identical to Java's String.intern() / identity comparison on interned strings.
  */
 typedef struct _graf_node {
-    t_symbol   *id;             /* node identifier (interned symbol, pointer equality valid) */
-    t_atom     *payload;        /* optional Max atoms attached to this node (int/float/symbol) */
+    t_symbol   *id;             // node identifier (interned symbol, pointer equality valid)
+    t_atom     *payload;        // optional Max atoms attached to this node (int/float/symbol)
     long        payload_count;
-    t_symbol  **edges_to;       /* dynamic array: target node IDs for outgoing edges */
-    double     *edge_weights;   /* parallel array: weight for each outgoing edge */
+    t_symbol  **edges_to;       // dynamic array: target node IDs for outgoing edges
+    double     *edge_weights;   // parallel array: weight for each outgoing edge
     long        edge_count;
 } t_graf_node;
 
@@ -65,12 +65,12 @@ typedef struct _graf_node {
 typedef struct _graf {
     t_object    ob;
     void       *outlet;
-    t_symbol   *name;           /* registered instance name */
-    t_graf_node *nodes;         /* dynamic array (capacity doubles on overflow) */
+    t_symbol   *name;           // registered instance name 
+    t_graf_node *nodes;         // dynamic array (capacity doubles on overflow) 
     long        node_count;
     long        node_capacity;
-    long        next_node_id;   /* auto-increment counter for anonymous node IDs */
-    t_symbol   *current;        /* current traversal position (NULL if unset) */
+    long        next_node_id;   // auto-increment counter for anonymous node IDs 
+    t_symbol   *current;        // current traversal position (NULL if unset) 
 } t_graf;
 
 
@@ -244,7 +244,7 @@ static inline double graf_increment_edge(t_graf *g, t_symbol *u,
 
     if (!src || !dst) return -1.0;
 
-    /* existing edge — just accumulate */
+    // existing edge — just accumulate
     for (i = 0; i < src->edge_count; i++) {
         if (src->edges_to[i] == v) {
             src->edge_weights[i] += amount;
@@ -252,7 +252,7 @@ static inline double graf_increment_edge(t_graf *g, t_symbol *u,
         }
     }
 
-    /* new edge — grow the parallel arrays (mirrors graf_addedge_quiet) */
+    // new edge — grow the parallel arrays (mirrors graf_addedge_quiet)
     {
         long new_count = src->edge_count + 1;
 

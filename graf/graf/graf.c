@@ -63,7 +63,7 @@
 #include <stdlib.h>      /* strtol, strtod */
 
 /* Initial capacity for the nodes array.
-   Will double automatically when exceeded (like Java ArrayList). */
+   Will double automatically when exceeded*/
 #define GRAF_INIT_CAPACITY       16
 
 /* Prefix used for auto-generated instance names when user doesn't specify one */
@@ -106,6 +106,7 @@ void  graf_hasnode(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_neighbours(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_adjacent(t_graf *x, t_symbol *s, long argc, t_atom *argv);
 void  graf_size(t_graf *x);
+void  graf_name(t_graf *x);
 void  graf_print(t_graf *x);
 void  graf_clear(t_graf *x);
 void  graf_write(t_graf *x, t_symbol *filename);
@@ -175,6 +176,7 @@ void ext_main(void *r)
     class_addmethod(c, (method)graf_neighbours,  "neighbours",  A_GIMME, 0);
     class_addmethod(c, (method)graf_adjacent,    "adjacent",    A_GIMME, 0);
     class_addmethod(c, (method)graf_size,        "size",        0);
+    class_addmethod(c, (method)graf_name,        "name",        0);
     class_addmethod(c, (method)graf_print,       "print",       0);
 
     /* persistence
@@ -1074,6 +1076,18 @@ void graf_size(t_graf *x)
     t_atom a;
     atom_setlong(&a, x->node_count);
     outlet_anything(x->outlet, gensym("size"), 1, &a);
+}
+
+/**
+ * name — output "name <symbol>", the registered instance name.
+ * Equivalent to a getName() accessor in Java.
+ * Query only — no notify.
+ */
+void graf_name(t_graf *x)
+{
+    t_atom a;
+    atom_setsym(&a, x->name);
+    outlet_anything(x->outlet, gensym("name"), 1, &a);
 }
 
 /**
