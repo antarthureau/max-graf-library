@@ -132,20 +132,20 @@ static t_class *s_graf_observe_class = NULL;
 //////////////////////////////////////////////////////////////////////////
 // Prototypes
 
-/* lifecycle */
+// lifecycle
 void *graf_observe_new(t_symbol *s, long argc, t_atom *argv);
 void  graf_observe_free(t_graf_observe *x);
 void  graf_observe_assist(t_graf_observe *x, void *b, long m, long a, char *s);
 
-/* graf lookup */
+// graf lookup
 t_graf *graf_observe_get_graf(t_graf_observe *x);
 
-/* internal helpers */
+// internal helpers
 static t_symbol *graf_observe_atom_to_sym(t_graf_observe *x, const t_atom *a);
 static t_symbol *graf_observe_window_key(t_graf_observe *x, char *buf, long buflen);
 static void      graf_observe_record_one(t_graf_observe *x, t_graf *g, t_symbol *id);
 
-/* message handlers */
+// message handlers
 void graf_observe_record(t_graf_observe *x, t_symbol *s, long argc, t_atom *argv);
 void graf_observe_order(t_graf_observe *x, long n);
 void graf_observe_forget(t_graf_observe *x);
