@@ -60,6 +60,10 @@ one graph.
     clear                         remove all nodes and edges
     write [filename]              save the graph to a CSV file
     read [filename]                load a graph from a CSV file
+    
+    todo:
+    root                            assign and goto an identified or randomly assigned rootnode
+    randomize <items>               randomize weights and/or edges, possibly deleting/Adding some new edges, flipping edges directions, etc                
 
 `[graf my_graph]` registers under a name other objects can find it by.
 `[graf]` with no argument still works, auto-named `graf_0`, `graf_1`, ...
@@ -89,10 +93,41 @@ traversal completes or hits a dead end.
 
 Draws a named `graf` instance live inside the patcher: nodes as circles,
 edges as directed arrows labelled with their weight, current position
-highlighted. Redraws automatically whenever the graph changes.
+highlighted. Redraws automatically whenever the graph changes. Ten
+selectable layouts; zoom and pan let you navigate graphs of any size
+without touching the computed positions. Edges between nodes that aren't
+neighbours in the layout arc around the nodes in between instead of
+crossing through them.
 
-    bang            force an immediate redraw
-    update <name>   switch to watching a different named graf instance
+    bang              force an immediate repaint
+    update <name>     switch to watching a different named graf instance
+    mode <name>       select the layout (see below); circle is the default
+    zoom <in/out>     zoom by a fixed step, anchored at the view center
+    move <direction>  pan the view by a fixed step- left, right, up or down
+    reset             fit the whole graph in the box (recomputes zoom + pan)
+    center            pan only, keeping zoom, so the current node is centered-
+                       handy for following a traversal through a large graph
+    redraw            recompute the layout from scratch- repacks grid/comb
+                       after removals, rescatters random
+
+Layouts (`mode <name>`):
+
+    circle      nodes on a ring, fixed spacing- the ring grows as nodes are added
+    line        a single row, fixed spacing, extends as nodes are added
+    random      scattered- each node id always lands in the same spot, even
+                 across sessions; `redraw` throws the dice again
+    grid        fixed-size cells, fills row by row; every node keeps its cell,
+                 removals leave holes until you `redraw`
+    comb        grid with every other row offset by half a cell
+    treeup      tree (or forest), roots at the top, children grow downward.
+                 A root is any node with no incoming edges; graphs with cycles
+                 fall back to treating the earliest-added node as a root
+    treedown    roots at the bottom, children grow upward
+    treeleft    roots at the left, children grow rightward
+    treeright   roots at the right, children grow leftward
+    rings       concentric circles by distance from the roots- roots at the
+                 center, each step outward is one edge deeper
+
 
 ### [graf.observe] - transition learner, graf builder
 
@@ -176,10 +211,9 @@ I will consider a Pure Data port once the basic Max version is stable, but you a
 welcome to work on it if inspired! :)
 
 Known bugs at this stage: creating two named `[graf]` instances that share a name
-across patches can and will crash Max; `[graf.affiche]` doesn't pick up its
-instance name at construction and needs a manual `update <name>` message; in
-addition, the circular layout of `[graf.affiche]` quickly becomes hard to read,
-so this is a priority on my to-do list.
+across patches can and will crash Max. The `[graf.affiche]` layout rework
+(multiple layouts, zoom/pan) is in but freshly landed- report anything odd.
+Force-directed layout and node dragging are next on the visual to-do list.
 
 -----
 
