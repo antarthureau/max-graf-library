@@ -13,6 +13,9 @@
  * (screen = world * zoom + pan) — they never modify stored positions.
  * World positions are recomputed only when the layout mode changes or the
  * watched graph reports "modified", never on a plain repaint.
+ * 
+ * TODO: add visited node/edge colors and last-visited node color to the UI, make them attributes
+ * TODO: allow parameters from inspector window for the layout such as colors, zoom, etc
  *
  * Layout modes (message: mode <name>):
  *   circle    — ring, fixed arc length per node (radius grows with n). Default.
@@ -67,57 +70,57 @@
 
 ////////////////////////// defines — visual geometry (screen px at zoom 1.0)
 
-#define GAFF_NODE_RADIUS    18.0    /* pixel radius of each node circle */
-#define GAFF_ARROW_LEN      10.0    /* arrowhead arm length in pixels */
-#define GAFF_ARROW_ANGLE    0.42    /* arrowhead opening half-angle in radians (~24°) */
-#define GAFF_WEIGHT_OFFSET  13.0    /* perpendicular offset for edge weight labels */
-#define GAFF_LOOP_RADIUS    9.0     /* radius of self-loop circle */
+#define GAFF_NODE_RADIUS    18.0    // pixel radius of each node circle
+#define GAFF_ARROW_LEN      10.0    // arrowhead arm length in pixels
+#define GAFF_ARROW_ANGLE    0.42    // arrowhead opening half-angle in radians (~24°)
+#define GAFF_WEIGHT_OFFSET  13.0    // perpendicular offset for edge weight labels
+#define GAFF_LOOP_RADIUS    9.0     // radius of self-loop circle
 
-/* Default box size (pixels) */
+// Default box size (pixels) */
 #define GAFF_DEFAULT_WIDTH  400
 #define GAFF_DEFAULT_HEIGHT 300
 
 
 ////////////////////////// defines — world-space layout constants
 
-/* World units are an arbitrary fixed scale: 1 world unit == 1 screen pixel at
+// World units are an arbitrary fixed scale: 1 world unit == 1 screen pixel at
    zoom 1.0. All layout spacing is defined here, in world units, and NEVER
    depends on the box size — `reset` fits the view to the content instead. */
 
-#define GAFF_ARC_LENGTH     90.0    /* circle: arc length allotted per node */
-#define GAFF_LINE_SPACING   90.0    /* line: horizontal pitch per node */
-#define GAFF_CELL           90.0    /* grid/comb: square cell size */
-#define GAFF_GRID_COLS      8       /* grid/comb: fixed column count (rows grow) */
-#define GAFF_RANDOM_EXTENT  800.0   /* random: side of the square ids hash into */
-#define GAFF_TREE_PITCH     70.0    /* tree: sibling-axis distance per width unit */
-#define GAFF_TREE_LEVEL     100.0   /* tree: depth-axis distance per level */
-#define GAFF_TREE_GAP       1.0     /* tree: extra gap between trees, in width units */
-#define GAFF_RING_STEP      90.0    /* rings: radius increment per BFS depth */
-#define GAFF_RING_CLUSTER_MARGIN 90.0 /* rings: clearance between component clusters
+#define GAFF_ARC_LENGTH     90.0    // circle: arc length allotted per node
+#define GAFF_LINE_SPACING   90.0    // line: horizontal pitch per node
+#define GAFF_CELL           90.0    // grid/comb: square cell size
+#define GAFF_GRID_COLS      8       // grid/comb: fixed column count (rows grow)
+#define GAFF_RANDOM_EXTENT  800.0   // random: side of the square ids hash into
+#define GAFF_TREE_PITCH     70.0    // tree: sibling-axis distance per width unit
+#define GAFF_TREE_LEVEL     100.0   // tree: depth-axis distance per level
+#define GAFF_TREE_GAP       1.0     // tree: extra gap between trees, in width units
+#define GAFF_RING_STEP      90.0    // rings: radius increment per BFS depth
+#define GAFF_RING_CLUSTER_MARGIN 90.0 // rings: clearance between component clusters
                                          (added to 2 * largest cluster radius to get
                                          the arrangement grid's cell size) */
 
-/* Edge curving: a non-adjacent edge bows LEFT of its direction of travel by
+// Edge curving: a non-adjacent edge bows LEFT of its direction of travel by
    GAFF_CURVE_STEP world units per skipped node, capped at a fraction of the
    edge length. One consistent side means reciprocal edges A->B / B->A bow to
    opposite sides and never overlap. */
 #define GAFF_CURVE_STEP     14.0
 #define GAFF_CURVE_MAX_FRAC 0.4
 
-/* Zoom / pan */
-#define GAFF_ZOOM_STEP      1.25    /* multiplier per `zoom in` (divide for out) */
+// Zoom / pan */
+#define GAFF_ZOOM_STEP      1.25    // multiplier per `zoom in` (divide for out) */
 #define GAFF_ZOOM_MIN       0.1
 #define GAFF_ZOOM_MAX       10.0
-#define GAFF_PAN_STEP       50.0    /* screen px per `move` — constant feel at any zoom */
-#define GAFF_FIT_MARGIN     0.9     /* `reset` fills 90% of the box */
-#define GAFF_FIT_MIN_SPAN   500.0   /* world units — autofit bbox floor: keeps 1-3 node
+#define GAFF_PAN_STEP       50.0    // screen px per `move` — constant feel at any zoom */
+#define GAFF_FIT_MARGIN     0.9     // `reset` fills 90% of the box */
+#define GAFF_FIT_MIN_SPAN   500.0   // world units — autofit bbox floor: keeps 1-3 node
                                        graphs near 1:1 instead of over-magnifying;
                                        tune against a real patch */
 
-/* Label legibility floors: below these the text would be unreadable anyway,
+// Label legibility floors: below these the text would be unreadable anyway,
    so skip it — declutters heavily zoomed-out views of large graphs. */
-#define GAFF_MIN_LABEL_RADIUS 5.0   /* skip node labels when screen radius < this */
-#define GAFF_MIN_WEIGHT_ZOOM  0.5   /* skip weight labels when zoom < this */
+#define GAFF_MIN_LABEL_RADIUS 5.0   // skip node labels when screen radius < this */
+#define GAFF_MIN_WEIGHT_ZOOM  0.5   // skip weight labels when zoom < this */
 
 
 ////////////////////////// defines — layout modes
@@ -138,19 +141,29 @@ enum {
 
 ////////////////////////// colors (dark theme, RGBA in [0..1])
 
-/* Static globals: initialized once, referenced by pointer in jgraphics calls.
+// Static globals: initialized once, referenced by pointer in jgraphics calls.
    In C, static globals at file scope are zero-initialized, then assigned here.
    Java analogy: private static final Color fields. */
 
-static t_jrgba GAFF_COLOR_BG           = {0.12, 0.12, 0.14, 1.0};  /* near-black background */
-static t_jrgba GAFF_COLOR_NODE         = {0.24, 0.27, 0.32, 1.0};  /* default node fill */
-static t_jrgba GAFF_COLOR_NODE_CURRENT = {0.18, 0.60, 0.38, 1.0};  /* current node: green */
-static t_jrgba GAFF_COLOR_NODE_BORDER  = {0.48, 0.52, 0.60, 1.0};  /* node outline */
-static t_jrgba GAFF_COLOR_EDGE         = {0.48, 0.52, 0.58, 1.0};  /* edge lines and arrows */
-static t_jrgba GAFF_COLOR_TEXT_NODE    = {0.92, 0.92, 0.94, 1.0};  /* node ID label */
-static t_jrgba GAFF_COLOR_TEXT_WEIGHT  = {0.82, 0.78, 0.38, 1.0};  /* weight label: warm yellow */
-static t_jrgba GAFF_COLOR_PLACEHOLDER  = {0.34, 0.34, 0.38, 1.0};  /* "no graph" message */
+static t_jrgba GAFF_COLOR_BG           = {0.12, 0.12, 0.14, 1.0};  // near-black background
+static t_jrgba GAFF_COLOR_NODE         = {0.24, 0.27, 0.32, 1.0};  // default node fill
+static t_jrgba GAFF_COLOR_NODE_CURRENT = {0.18, 0.60, 0.38, 1.0};  // current node: green
+static t_jrgba GAFF_COLOR_NODE_BORDER  = {0.48, 0.52, 0.60, 1.0};  // node outline
+static t_jrgba GAFF_COLOR_EDGE         = {0.48, 0.52, 0.58, 1.0};  // edge lines and arrows
+static t_jrgba GAFF_COLOR_TEXT_NODE    = {0.92, 0.92, 0.94, 1.0};  // node ID label
+static t_jrgba GAFF_COLOR_TEXT_WEIGHT  = {0.82, 0.78, 0.38, 1.0};  // weight label: warm yellow
+static t_jrgba GAFF_COLOR_PLACEHOLDER  = {0.34, 0.34, 0.38, 1.0};  // "no graph" message
 
+//TODO: add visited node/edge colors and last-visited node color to the UI, make them attributes
+//These needs to be tied to new edits in graf.c and graf.h because last visited and next visited etc are not tracked for now.
+// static t_jrgba GAFF_COLLOR_VISITED_NODES = {0.18, 0.60, 0.38, 0.3};  // visited nodes: translucent green
+// static t_jrgba GAFF_COLOR_VISITED_ED_EDGES = {0.82, 0.78, 0.38, 0.3};  // visited edges: half-yellow
+// static t_jrgba GAFF_COLOR_LAST_VISITED_NODE = {0.18, 0.60, 0.38, 0.6};  // last visited node: half-green
+// static t_jrgba GAFF_COLOR_LAST_VISITED_EDGE = {0.82, 0.78, 0.38, 0.3};  // last visited edge: half-yellow
+
+// could also add most probable next node/edge based on navigation algo or weight. 
+// could also add a day/night mode or even better some inspector-window layout attributes such as background color, node color, edge color
+//and derive visited color from them (half values for grey channel).
 
 ////////////////////////// data structures
 
@@ -164,14 +177,14 @@ static t_jrgba GAFF_COLOR_PLACEHOLDER  = {0.34, 0.34, 0.38, 1.0};  /* "no graph"
  * array before it is discarded.
  *
  * Java analogy: the whole array is a Map<NodeId, Point2D> flattened into the
- * graph's own node order for O(1) access during painting.
+ * graphs own node order for O(1) access during painting.
  */
 typedef struct _gaff_pos {
-    t_symbol   *id;         /* node id this entry belongs to */
-    double      wx, wy;     /* world coordinates */
-    long        cell;       /* grid/comb: persistent cell index; -1 elsewhere */
-    long        parent;     /* tree/rings: BFS parent as a node index; -1 = root */
-    long        depth;      /* tree/rings: BFS depth from the root */
+    t_symbol   *id;         // node id this entry belongs to
+    double      wx, wy;     // world coordinates
+    long        cell;       // grid/comb: persistent cell index; -1 elsewhere
+    long        parent;     // tree/rings: BFS parent as a node index; -1 = root
+    long        depth;      // tree/rings: BFS depth from the root
 } t_gaff_pos;
 
 /**
@@ -184,24 +197,24 @@ typedef struct _gaff_pos {
  * Java analogy: extends JPanel { ... }
  */
 typedef struct _graf_affiche {
-    t_jbox      box;            /* MUST be first — jbox subclass header */
-    t_symbol   *graf_name;      /* name of the [graf] instance we are watching */
+    t_jbox      box;            // MUST be first — jbox subclass header
+    t_symbol   *graf_name;      // name of the [graf] instance we are watching
 
-    long        mode;           /* GAFF_MODE_* — current layout */
+    long        mode;           // GAFF_MODE_* — current layout
 
-    t_gaff_pos *pos;            /* heap array of world positions (sysmem) */
-    long        pos_count;      /* entries currently valid */
-    long        pos_capacity;   /* allocated entries (doubling growth) */
+    t_gaff_pos *pos;            // heap array of world positions (sysmem)
+    long        pos_count;      // entries currently valid
+    long        pos_capacity;   // allocated entries (doubling growth)
 
-    double      view_zoom;      /* view transform: screen = world*zoom + pan + boxcenter */
+    double      view_zoom;      // view transform: screen = world*zoom + pan + boxcenter
     double      view_pan_x;
     double      view_pan_y;
 
-    unsigned long long rand_seed; /* instance seed for random mode; `redraw` advances it */
+    unsigned long long rand_seed; // instance seed for random mode; `redraw` advances it
 
-    char        layout_dirty;   /* graph changed — sync positions before next paint */
-    char        layout_full;    /* discard per-id stability, relayout from scratch */
-    char        needs_autofit;  /* run the `reset` fit at next paint (box size known there) */
+    char        layout_dirty;   // graph changed — sync positions before next paint
+    char        layout_full;    // discard per-id stability, relayout from scratch
+    char        needs_autofit;  // run the `reset` fit at next paint (box size known there)
 } t_graf_affiche;
 
 
@@ -211,11 +224,11 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv);
 void  graf_affiche_free(t_graf_affiche *x);
 void  graf_affiche_assist(t_graf_affiche *x, void *b, long m, long a, char *s);
 
-/* Paint is the draw callback — registered as "paint" A_CANT.
+// Paint is the draw callback — registered as "paint" A_CANT.
    A_CANT means "called by Max internally, not from a patcher" — like @Override. */
 void  graf_affiche_paint(t_graf_affiche *x, t_object *patcherview);
 
-/* notify receives events from subscribed objects (our watched graf instance)
+// notify receives events from subscribed objects (our watched graf instance)
    and from jbox itself (attribute changes, resize, etc.). */
 t_max_err graf_affiche_notify(t_graf_affiche *x, t_symbol *s, t_symbol *msg,
                                void *sender, void *data);
@@ -229,10 +242,10 @@ void  graf_affiche_reset(t_graf_affiche *x);
 void  graf_affiche_center(t_graf_affiche *x);
 void  graf_affiche_redraw(t_graf_affiche *x);
 
-/* NOTE: future mouse support (node dragging) hooks in here as jbox "mousedown"/
+// NOTE: future mouse support (node dragging) hooks in here as jbox "mousedown"/
    "mousedrag" A_CANT methods doing inverse-transform hit-testing — deferred. */
 
-/* Layout engine — static so they are private to this translation unit */
+// Layout engine — static so they are private to this translation unit */
 static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph);
 static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth,
                            long *component);
@@ -241,7 +254,7 @@ static void gaff_autofit(t_graf_affiche *x, double view_w, double view_h);
 static long gaff_index_of(t_graf *graph, t_symbol *id);
 static const char *gaff_mode_name(long mode);
 
-/* Drawing helpers */
+// Drawing helpers */
 static void gaff_draw_arrow(t_jgraphics *g, double x1, double y1,
                              double x2, double y2, double node_r, double zoom);
 static void gaff_draw_curve(t_jgraphics *g, double x1, double y1,
@@ -257,7 +270,7 @@ static void gaff_draw_weight_label(t_jgraphics *g, double mx, double my,
 static void gaff_draw_placeholder(t_jgraphics *g, t_rect *rect,
                                    const char *line1, const char *line2);
 
-/* Global class pointer */
+// Global class pointer */
 void *graf_affiche_class;
 
 
@@ -285,19 +298,19 @@ void ext_main(void *r)
                   sizeof(t_graf_affiche),
                   0L, A_GIMME, 0);
 
-    /* Required for jbox — enables the dictionary-based constructor protocol */
+    // Required for jbox — enables the dictionary-based constructor protocol */
     c->c_flags |= CLASS_FLAG_NEWDICTIONARY;
 
-    /* Register as a jbox subclass. 0 = no extra attributes (we handle colors
+    // Register as a jbox subclass. 0 = no extra attributes (we handle colors
        ourselves; use JBOX_COLOR here later if you want inspector color pickers) */
     jbox_initclass(c, 0);
 
-    /* Internal callbacks — A_CANT means Max calls these, not the user */
+    // Internal callbacks — A_CANT means Max calls these, not the user */
     class_addmethod(c, (method)graf_affiche_paint,  "paint",  A_CANT, 0);
     class_addmethod(c, (method)graf_affiche_notify, "notify", A_CANT, 0);
     class_addmethod(c, (method)graf_affiche_assist, "assist", A_CANT, 0);
 
-    /* User-facing messages */
+    // User-facing messages */
     class_addmethod(c, (method)graf_affiche_bang,   "bang",   0);
     class_addmethod(c, (method)graf_affiche_update, "update", A_SYM, 0);
     class_addmethod(c, (method)graf_affiche_mode,   "mode",   A_SYM, 0);
@@ -307,7 +320,7 @@ void ext_main(void *r)
     class_addmethod(c, (method)graf_affiche_center, "center", 0);
     class_addmethod(c, (method)graf_affiche_redraw, "redraw", 0);
 
-    /* Default box size — shows up in the patcher when the user creates the object */
+    // Default box size — shows up in the patcher when the user creates the object */
     CLASS_ATTR_DEFAULT(c, "patching_rect", 0, "0. 0. 400. 300.");
 
     class_register(CLASS_BOX, c);
@@ -353,15 +366,15 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
     t_dictionary   *d = NULL;
     long i;
 
-    /* Step 1: extract patcher dictionary — MUST come first for jbox objects */
+    // Step 1: extract patcher dictionary — MUST come first for jbox objects */
     if (!(d = object_dictionaryarg(argc, argv)))
         return NULL;
 
-    /* Step 2: allocate */
+    // Step 2: allocate */
     x = (t_graf_affiche *)object_alloc(graf_affiche_class);
     if (!x) return NULL;
 
-    /* Step 3: initialize jbox portion.
+    // Step 3: initialize jbox portion.
        Box flags control resize behaviour and drawing order:
        JBOX_DRAWFIRSTIN  — draw the first inlet on the box
        JBOX_NODRAWBOX    — suppress Max's default box border (we draw our own bg)
@@ -377,10 +390,10 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
 
     jbox_new(&x->box, boxflags, argc, argv);
 
-    /* Step 4: first inlet belongs to us */
+    // Step 4: first inlet belongs to us */
     x->box.b_firstin = (t_object *)x;
 
-    /* Initialize our own state before anything can trigger a paint */
+    // Initialize our own state before anything can trigger a paint */
     x->graf_name     = NULL;
     x->mode          = GAFF_MODE_CIRCLE;
     x->pos           = NULL;
@@ -389,14 +402,14 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
     x->view_zoom     = 1.0;
     x->view_pan_x    = 0.0;
     x->view_pan_y    = 0.0;
-    /* Fixed default seed: random layouts reproduce across patcher reloads.
+    // Fixed default seed: random layouts reproduce across patcher reloads.
        `redraw` advances it for a fresh scatter. */
     x->rand_seed     = 0x9E3779B97F4A7C15ULL;
     x->layout_dirty  = 1;
     x->layout_full   = 1;
     x->needs_autofit = 1;
 
-    /* Step 5a: try argv directly — first non-'@' symbol atom */
+    // Step 5a: try argv directly — first non-'@' symbol atom */
     for (i = 0; i < argc; i++) {
         if (atom_gettype(argv + i) == A_SYM) {
             t_symbol *sym = atom_getsym(argv + i);
@@ -407,7 +420,7 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
     if (x->graf_name)
         post("graf.affiche: name '%s' found via argv", x->graf_name->s_name);
 
-    /* Step 5b: dictionary "args" key */
+    // Step 5b: dictionary "args" key */
     if (!x->graf_name && d) {
         long dargc = 0; t_atom *dargv = NULL;
         if (dictionary_getatoms(d, gensym("args"), &dargc, &dargv) == MAX_ERR_NONE) {
@@ -424,7 +437,7 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
             post("graf.affiche: name '%s' found via dict args", x->graf_name->s_name);
     }
 
-    /* Step 5c: dictionary "text" key — tokenize the raw box text.
+    // Step 5c: dictionary "text" key — tokenize the raw box text.
        Token 0 is the class name ("graf.affiche"); the first following token
        that doesn't start with '@' is our instance name. Positional args always
        precede attribute args in Max box text, so stop at the first '@'. */
@@ -460,13 +473,13 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
             post("graf.affiche: name '%s' found via dict text", x->graf_name->s_name);
     }
 
-    /* Permanent guard: all three lookup stages came up empty — either the box
+    // Permanent guard: all three lookup stages came up empty — either the box
        genuinely has no name argument, or the lookup is silently failing. */
     if (!x->graf_name)
         object_warn((t_object *)x,
             "graf.affiche: no instance name found in argv, dict args, or dict text");
 
-    /* Subscribe to the named graf instance.
+    // Subscribe to the named graf instance.
        object_subscribe works by name — the target does not need to exist yet.
        When a [graf my_graph] is created or registered later, we will start
        receiving its notifications automatically.
@@ -478,10 +491,10 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
         post("graf.affiche: watching '%s'", x->graf_name->s_name);
     }
 
-    /* Step 6: apply saved attribute values from the patcher dictionary */
+    // Step 6: apply saved attribute values from the patcher dictionary */
     attr_dictionary_process(x, d);
 
-    /* Step 7: finalize — triggers the first paint */
+    // Step 7: finalize — triggers the first paint */
     jbox_ready(&x->box);
 
     return x;
@@ -540,6 +553,9 @@ t_max_err graf_affiche_notify(t_graf_affiche *x, t_symbol *s, t_symbol *msg,
         jbox_redraw(&x->box);
     }
     return MAX_ERR_NONE;
+
+    //TODO: bug displaying "graf.affiche: got 'modified' notify" too often in the console anytime we have a next step from the traverse object, must fix
+ 
 }
 
 /**
@@ -559,7 +575,7 @@ void graf_affiche_bang(t_graf_affiche *x)
  */
 void graf_affiche_update(t_graf_affiche *x, t_symbol *name)
 {
-    /* No-op switch: already watching this instance. Without this guard,
+    // No-op switch: already watching this instance. Without this guard,
        `update` to the same name forces layout_full + autofit — a view refit
        indistinguishable from `reset`. Just repaint, like bang.
        (First assignment still works: graf_name is NULL then, so any real
@@ -720,7 +736,7 @@ void graf_affiche_center(t_graf_affiche *x)
     // find the stored world position of the current node
     for (i = 0; i < x->pos_count; i++) {
         if (x->pos[i].id == graph->current) {
-            /* screen = world*zoom + pan + boxcenter; we want screen == boxcenter,
+            // screen = world*zoom + pan + boxcenter; we want screen == boxcenter,
                so pan = -world*zoom */
             x->view_pan_x = -x->pos[i].wx * x->view_zoom;
             x->view_pan_y = -x->pos[i].wy * x->view_zoom;
@@ -757,7 +773,7 @@ void graf_affiche_redraw(t_graf_affiche *x)
 
 ////////////////////////// layout engine — helpers
 
-/* Insertion-order index of a node id within the graph, -1 if absent.
+// Insertion-order index of a node id within the graph, -1 if absent.
    Same linear scan as graf_find_node, but returning the index. */
 static long gaff_index_of(t_graf *graph, t_symbol *id)
 {
@@ -810,7 +826,7 @@ static unsigned long long gaff_hash_id(const char *s, unsigned long long seed)
     return h ^ (h >> 31);
 }
 
-/* Map the top 53 bits of a hash to a double in [0, 1). */
+// Map the top 53 bits of a hash to a double in [0, 1). */
 static double gaff_hash01(unsigned long long h)
 {
     return (double)(h >> 11) * (1.0 / 9007199254740992.0);  // 2^-53
@@ -894,7 +910,7 @@ static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth,
         }
     }
 
-    /* Flatten union-find into dense component ids, numbered 0..K-1 by lowest
+    // Flatten union-find into dense component ids, numbered 0..K-1 by lowest
        insertion index. Because union always keeps the smaller index as root,
        every set root is its own component's first node — so a root's id is
        always assigned before any member that points at it. */
@@ -991,7 +1007,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
         return;
     }
 
-    /* Grow the position array (doubling, sysmem — kills the old 256 cap).
+    // Grow the position array (doubling, sysmem — kills the old 256 cap).
        Java analogy: ArrayList.ensureCapacity(n). */
     if (n > x->pos_capacity) {
         long newcap = (x->pos_capacity > 0) ? x->pos_capacity : 16;
@@ -1010,7 +1026,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
     switch (x->mode) {
 
     case GAFF_MODE_CIRCLE: {
-        /* Fixed arc length per node: radius grows as nodes are added instead
+        // Fixed arc length per node: radius grows as nodes are added instead
            of spacing shrinking. World center at the origin, start at
            12 o'clock, clockwise (screen y grows downward). */
         double r = (double)n * GAFF_ARC_LENGTH / (2.0 * M_PI);
@@ -1040,7 +1056,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
     }
 
     case GAFF_MODE_RANDOM: {
-        /* Position = hash of the id string ⊕ instance seed. Stable per id:
+        // Position = hash of the id string ⊕ instance seed. Stable per id:
            never re-randomized by repaints or by other nodes arriving. Two
            independent avalanche passes give uncorrelated x and y. */
         for (k = 0; k < n; k++) {
@@ -1059,7 +1075,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
 
     case GAFF_MODE_GRID:
     case GAFF_MODE_COMB: {
-        /* Sticky cells. Incremental sync: surviving ids keep their cell, new
+        // Sticky cells. Incremental sync: surviving ids keep their cell, new
            ids take the lowest free cell. Because freed cells are always
            reused first, the highest cell index stays bounded by the peak
            node count — the used[] bitmap below is sized accordingly. */
@@ -1129,7 +1145,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
     case GAFF_MODE_TREELEFT:
     case GAFF_MODE_TREERIGHT:
     case GAFF_MODE_RINGS: {
-        /* Spanning forest by BFS, then either Reingold–Tilford subtree-width
+        // Spanning forest by BFS, then either Reingold–Tilford subtree-width
            placement (trees) or concentric rings by depth (rings).
 
            Scratch layout: four long arrays + three double arrays, all length
@@ -1157,7 +1173,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
         }
 
         if (x->mode == GAFF_MODE_RINGS) {
-            /* Concentric rings, PER COMPONENT: within one weakly-connected
+            // Concentric rings, PER COMPONENT: within one weakly-connected
                component, nodes at BFS depth d sit on a circle of radius
                d * GAFF_RING_STEP, evenly spaced in BFS order, 12 o'clock
                start. A single depth-0 node sits at the exact component
@@ -1195,7 +1211,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
             if (rowlen < 1) rowlen = 1;
             double cellsize = 2.0 * maxrad + GAFF_RING_CLUSTER_MARGIN;
 
-            /* Position one component at a time: its own per-depth population
+            // Position one component at a time: its own per-depth population
                and fill index (width[]/center[] reused per component — depths
                are local, so only entries 0..cmaxd[c] are touched), then
                translate the local polar coords by the component's grid cell. */
@@ -1233,7 +1249,7 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
             }
             sysmem_freeptr(cmaxd);
         } else {
-            /* Simplified Reingold–Tilford, two passes over the BFS order:
+            // Simplified Reingold–Tilford, two passes over the BFS order:
 
                Pass 1 (reverse order = children before parents): subtree width
                along the sibling axis. A leaf is 1 unit wide; an internal node
@@ -1376,7 +1392,7 @@ static void gaff_autofit(t_graf_affiche *x, double view_w, double view_h)
     double pad = GAFF_NODE_RADIUS + 8.0;            // world-space padding
     double bw  = (maxx - minx) + 2.0 * pad;
     double bh  = (maxy - miny) + 2.0 * pad;
-    /* Floor the fit box: a 1-node graph's real bbox is ~2*pad, which a 400px
+    // Floor the fit box: a 1-node graph's real bbox is ~2*pad, which a 400px
        view would "fit" at 5x zoom — absurd magnification exactly when nodes
        are being typed in one at a time. Once the real bbox exceeds the floor,
        autofit behaves exactly as before. */
@@ -1413,10 +1429,10 @@ static void gaff_draw_arrow(t_jgraphics *g,
     double len = sqrt(dx * dx + dy * dy);
     if (len < 1.0) return;
 
-    double ndx = dx / len;  /* normalized direction */
+    double ndx = dx / len;  // normalized direction */
     double ndy = dy / len;
 
-    /* Start and end points, pulled back from each center by the node radius */
+    // Start and end points, pulled back from each center by the node radius */
     double sx = x1 + ndx * node_r;
     double sy = y1 + ndy * node_r;
     double ex = x2 - ndx * node_r;
@@ -1427,12 +1443,12 @@ static void gaff_draw_arrow(t_jgraphics *g,
     jgraphics_set_source_jrgba(g, &GAFF_COLOR_EDGE);
     jgraphics_set_line_width(g, 1.2 * zoom);
 
-    /* Edge shaft */
+    // Edge shaft */
     jgraphics_move_to(g, sx, sy);
     jgraphics_line_to(g, ex, ey);
     jgraphics_stroke(g);
 
-    /* Arrowhead: two lines diverging from the endpoint at ±GAFF_ARROW_ANGLE */
+    // Arrowhead: two lines diverging from the endpoint at ±GAFF_ARROW_ANGLE */
     double angle = atan2(dy, dx);
     jgraphics_move_to(g, ex, ey);
     jgraphics_line_to(g,
@@ -1479,11 +1495,11 @@ static void gaff_draw_curve(t_jgraphics *g,
     double lnx = ndy;       // left-of-travel normal (y-down coordinates)
     double lny = -ndx;
 
-    /* Control point: chord midpoint + 2*bow along the left normal */
+    // Control point: chord midpoint + 2*bow along the left normal */
     double cx = (x1 + x2) * 0.5 + lnx * 2.0 * bow;
     double cy = (y1 + y2) * 0.5 + lny * 2.0 * bow;
 
-    /* Trim the endpoints to the node rims along the local curve direction */
+    // Trim the endpoints to the node rims along the local curve direction */
     double d1x = cx - x1, d1y = cy - y1;
     double l1  = sqrt(d1x * d1x + d1y * d1y);
     double d2x = x2 - cx, d2y = y2 - cy;
@@ -1495,7 +1511,7 @@ static void gaff_draw_curve(t_jgraphics *g,
     double ex = x2 - (d2x / l2) * node_r;
     double ey = y2 - (d2y / l2) * node_r;
 
-    /* Quadratic (s, ctrl, e) elevated to the cubic jgraphics understands */
+    // Quadratic (s, ctrl, e) elevated to the cubic jgraphics understands */
     double c1x = sx + (cx - sx) * (2.0 / 3.0);
     double c1y = sy + (cy - sy) * (2.0 / 3.0);
     double c2x = ex + (cx - ex) * (2.0 / 3.0);
@@ -1507,7 +1523,7 @@ static void gaff_draw_curve(t_jgraphics *g,
     jgraphics_curve_to(g, c1x, c1y, c2x, c2y, ex, ey);
     jgraphics_stroke(g);
 
-    /* Arrowhead: tangent at the endpoint runs from the control point to it */
+    // Arrowhead: tangent at the endpoint runs from the control point to it */
     double alen  = GAFF_ARROW_LEN * zoom;
     double angle = atan2(ey - cy, ex - cx);
     jgraphics_move_to(g, ex, ey);
@@ -1520,7 +1536,7 @@ static void gaff_draw_curve(t_jgraphics *g,
         ey - alen * sin(angle + GAFF_ARROW_ANGLE));
     jgraphics_stroke(g);
 
-    /* Label anchor: curve point at t=0.5 (= ¼s + ½ctrl + ¼e), nudged outward */
+    // Label anchor: curve point at t=0.5 (= ¼s + ½ctrl + ¼e), nudged outward */
     if (label_x && label_y) {
         *label_x = 0.25 * sx + 0.5 * cx + 0.25 * ex + lnx * GAFF_WEIGHT_OFFSET * zoom;
         *label_y = 0.25 * sy + 0.5 * cy + 0.25 * ey + lny * GAFF_WEIGHT_OFFSET * zoom;
@@ -1542,14 +1558,14 @@ static void gaff_draw_selfloop(t_jgraphics *g, double cx, double cy, double zoom
     jgraphics_set_source_jrgba(g, &GAFF_COLOR_EDGE);
     jgraphics_set_line_width(g, 1.2 * zoom);
 
-    /* Loop circle */
+    // Loop circle */
     jgraphics_arc(g, cx, loop_cy, loop_r, 0., 2.0 * M_PI);
     jgraphics_stroke(g);
 
-    /* Arrowhead at the bottom of the loop, pointing downward (angle = π/2) */
+    // Arrowhead at the bottom of the loop, pointing downward (angle = π/2) */
     double ex = cx;
     double ey = loop_cy + loop_r;
-    double angle = M_PI * 0.5; /* pointing downward */
+    double angle = M_PI * 0.5; // pointing downward */
     jgraphics_move_to(g, ex, ey);
     jgraphics_line_to(g,
         ex - alen * cos(angle - GAFF_ARROW_ANGLE),
@@ -1596,7 +1612,7 @@ static void gaff_draw_weight_label(t_jgraphics *g, double mx, double my,
                                     double weight, double zoom)
 {
     char text[16];
-    /* %g: compact notation — drops trailing zeros, no exponent for normal magnitudes */
+    // %g: compact notation — drops trailing zeros, no exponent for normal magnitudes */
     snprintf(text, sizeof(text), "%g", weight);
 
     t_jfont *font = jfont_create("Arial",
@@ -1668,40 +1684,40 @@ static void gaff_draw_placeholder(t_jgraphics *g, t_rect *rect,
  */
 void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
 {
-    /* Get drawing context and box bounds */
+    // Get drawing context and box bounds */
     t_jgraphics *g = (t_jgraphics *)patcherview_get_jgraphics(patcherview);
     t_rect rect;
     jbox_get_rect_for_view((t_object *)&x->box, patcherview, &rect);
 
-    /* --- background -------------------------------------------------------- */
+    // --- background -------------------------------------------------------- */
     jgraphics_set_source_jrgba(g, &GAFF_COLOR_BG);
     jgraphics_rectangle(g, 0., 0., rect.width, rect.height);
     jgraphics_fill(g);
 
-    /* --- guard: no name assigned ------------------------------------------- */
+    // --- guard: no name assigned ------------------------------------------- */
     if (!x->graf_name) {
         gaff_draw_placeholder(g, &rect, "graf.affiche", "(no graph assigned)");
         return;
     }
 
-    /* --- guard: named instance not registered yet --------------------------- */
+    // --- guard: named instance not registered yet --------------------------- */
     t_graf *graph = graf_find(x->graf_name);
     if (!graph) {
         gaff_draw_placeholder(g, &rect, x->graf_name->s_name, "(not found)");
         goto draw_name_label;
     }
 
-    /* --- lazy layout sync (runs even for n==0, clearing stale positions) ---- */
+    // --- lazy layout sync (runs even for n==0, clearing stale positions) ---- */
     if (x->layout_dirty || x->layout_full || x->pos_count != graph->node_count)
         gaff_layout_sync(x, graph);
 
-    /* --- guard: empty graph ------------------------------------------------- */
+    // --- guard: empty graph ------------------------------------------------- */
     if (graph->node_count == 0) {
         gaff_draw_placeholder(g, &rect, x->graf_name->s_name, "(empty)");
         goto draw_name_label;
     }
 
-    /* --- deferred auto-fit (needs the box size, only known here) ------------ */
+    // --- deferred auto-fit (needs the box size, only known here) ------------ */
     if (x->needs_autofit) {
         gaff_autofit(x, rect.width, rect.height);
         x->needs_autofit = 0;
@@ -1715,7 +1731,7 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
         double node_r = GAFF_NODE_RADIUS * zoom;
         long   i;
 
-        /* Screen coordinates, computed once per paint.
+        // Screen coordinates, computed once per paint.
            Heap scratch — n is unbounded now, no stack arrays.
            Java analogy: double[] sx = new double[n]; but freed by hand. */
         double *sx = (double *)sysmem_newptr(n * sizeof(double));
@@ -1730,23 +1746,23 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
             sy[i] = x->pos[i].wy * zoom + x->view_pan_y + vcy;
         }
 
-        /* --- draw edges ---------------------------------------------------- */
+        // --- draw edges ---------------------------------------------------- */
         for (i = 0; i < n; i++) {
             t_graf_node *src = &graph->nodes[i];
             long j;
 
             for (j = 0; j < src->edge_count; j++) {
-                /* Find the index of the target node for its layout position.
+                // Find the index of the target node for its layout position.
                    Linear scan by symbol pointer equality — O(n) per edge. */
                 long ti = gaff_index_of(graph, src->edges_to[j]);
-                if (ti < 0) continue; /* dangling edge — target gone */
+                if (ti < 0) continue; // dangling edge — target gone */
 
                 double weight  = src->edge_weights[j];
                 double label_x = 0.0, label_y = 0.0;
                 int    have_label = 0;
 
                 if (i == ti) {
-                    /* Self-loop */
+                    // Self-loop */
                     gaff_draw_selfloop(g, sx[i], sy[i], zoom);
                     continue;
                 }
@@ -1754,7 +1770,7 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
                 long skip = gaff_edge_skip(x, i, ti, n);
 
                 if (skip <= 0) {
-                    /* Adjacent-in-layout: straight, as before */
+                    // Adjacent-in-layout: straight, as before */
                     gaff_draw_arrow(g, sx[i], sy[i], sx[ti], sy[ti], node_r, zoom);
 
                     if (weight != 0.0) {
@@ -1764,7 +1780,7 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
                         if (len > 0.1) {
                             double ndx = dx / len;
                             double ndy = dy / len;
-                            /* Midpoint of the visible shaft, offset to the side */
+                            // Midpoint of the visible shaft, offset to the side */
                             double ssx = sx[i]  + ndx * node_r;
                             double ssy = sy[i]  + ndy * node_r;
                             double eex = sx[ti] - ndx * node_r;
@@ -1775,7 +1791,7 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
                         }
                     }
                 } else {
-                    /* Non-adjacent: bow left of travel, GAFF_CURVE_STEP world
+                    // Non-adjacent: bow left of travel, GAFF_CURVE_STEP world
                        units per skipped node, capped at a fraction of the
                        edge length so short edges with big skips stay sane. */
                     double dx  = sx[ti] - sx[i];
@@ -1791,32 +1807,32 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
                     have_label = (weight != 0.0);
                 }
 
-                /* Weight label — only when weight != 0.0 (avoids clutter on
+                // Weight label — only when weight != 0.0 (avoids clutter on
                    unweighted graphs) and only above the legibility floor */
                 if (have_label && weight != 0.0 && zoom >= GAFF_MIN_WEIGHT_ZOOM)
                     gaff_draw_weight_label(g, label_x, label_y, weight, zoom);
             }
         }
 
-        /* --- draw nodes ---------------------------------------------------- */
+        // --- draw nodes ---------------------------------------------------- */
         for (i = 0; i < n; i++) {
             t_graf_node *node = &graph->nodes[i];
             t_jrgba *fill = (graph->current == node->id)
                             ? &GAFF_COLOR_NODE_CURRENT
                             : &GAFF_COLOR_NODE;
 
-            /* Filled circle */
+            // Filled circle */
             jgraphics_arc(g, sx[i], sy[i], node_r, 0., 2.0 * M_PI);
             jgraphics_set_source_jrgba(g, fill);
             jgraphics_fill(g);
 
-            /* Border (re-draw path since fill consumed it) */
+            // Border (re-draw path since fill consumed it) */
             jgraphics_arc(g, sx[i], sy[i], node_r, 0., 2.0 * M_PI);
             jgraphics_set_source_jrgba(g, &GAFF_COLOR_NODE_BORDER);
             jgraphics_set_line_width(g, 1.5 * zoom);
             jgraphics_stroke(g);
 
-            /* Node ID label — skipped when too small to read anyway */
+            // Node ID label — skipped when too small to read anyway */
             if (node_r >= GAFF_MIN_LABEL_RADIUS)
                 gaff_draw_node_label(g, node->id->s_name,
                                       sx[i], sy[i], node_r, zoom,
@@ -1827,7 +1843,7 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
         sysmem_freeptr(sy);
     }
 
-    /* --- instance name + mode label (bottom-left corner, always drawn) ------ */
+    // --- instance name + mode label (bottom-left corner, always drawn) ------ */
 draw_name_label:
     if (x->graf_name) {
         char corner[160];
