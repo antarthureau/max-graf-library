@@ -200,6 +200,8 @@ typedef struct _graf_affiche {
     t_jbox      box;            // MUST be first — jbox subclass header
     t_symbol   *graf_name;      // name of the [graf] instance we are watching
 
+    void        *outlet_xyz;      // outlet xyz for - x axis position, y axis position, z axis position (zoom factor)
+
     long        mode;           // GAFF_MODE_* — current layout
 
     t_gaff_pos *pos;            // heap array of world positions (sysmem)
@@ -269,6 +271,7 @@ static void gaff_draw_weight_label(t_jgraphics *g, double mx, double my,
                                     double weight, double zoom);
 static void gaff_draw_placeholder(t_jgraphics *g, t_rect *rect,
                                    const char *line1, const char *line2);
+static void gaff_report_xyz(t_graf_affiche *x);
 
 // Global class pointer */
 void *graf_affiche_class;
@@ -392,6 +395,9 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
 
     // Step 4: first inlet belongs to us
     x->box.b_firstin = (t_object *)x;
+    
+    // Create outlet for zoom factor output
+    x->outlet_xyz = outlet_new(x, NULL);
 
     // Initialize our own state before anything can trigger a paint
     x->graf_name     = NULL;
@@ -514,6 +520,22 @@ void graf_affiche_free(t_graf_affiche *x)
     if (x->pos)
         sysmem_freeptr(x->pos);
     jbox_free(&x->box);
+}
+
+/**
+ * gaff_report_xyz — pack current pan x, pan y, and zoom into one list
+ * message and send it atomically out outlet_xyz. Reads live struct state,
+ * so it's safe to call from zoom() or move() regardless of which one
+ * actually changed.
+ */
+static void gaff_report_xyz(t_graf_affiche *x)
+{
+    t_atom av[3];
+    atom_setfloat(&av[0], x->view_pan_x);
+    atom_setfloat(&av[1], x->view_pan_y);
+    atom_setfloat(&av[2], x->view_zoom * 100.0);
+
+    outlet_list(x->outlet_xyz, NULL, 3, av);
 }
 
 void graf_affiche_assist(t_graf_affiche *x, void *b, long m, long a, char *s)
@@ -668,8 +690,14 @@ void graf_affiche_zoom(t_graf_affiche *x, t_symbol *dir)
     x->view_pan_x *= applied;
     x->view_pan_y *= applied;
 
+    // report the new zoom factor to the zoom outlet (test)
+    gaff_report_xyz(x);
+
+    //DEBUG LINE: uncomment to see the zoom value in the console
     // report the APPLIED value — at the clamp bounds it differs from requested
-    post("graf.affiche: zoom %.0f%%", x->view_zoom * 100.0);
+    // post("graf.affiche: zoom %.0f%%", x->view_zoom * 100.0);
+
+    // redraw the box with the new zoom and pan values
     jbox_redraw(&x->box);
 }
 
@@ -689,7 +717,11 @@ void graf_affiche_move(t_graf_affiche *x, t_symbol *dir)
         return;
     }
 
-    post("graf.affiche: pan %.0f %.0f", x->view_pan_x, x->view_pan_y);
+    // report the new pan values to the xyz outlet (test)
+    gaff_report_xyz(x);
+
+    //DEBUG LINE: uncomment to see the pan values in the console
+    //post("graf.affiche: pan %.0f %.0f", x->view_pan_x, x->view_pan_y);
     jbox_redraw(&x->box);
 }
 

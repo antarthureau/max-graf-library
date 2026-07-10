@@ -64,13 +64,16 @@ typedef struct _graf_node {
  */
 typedef struct _graf {
     t_object    ob;
-    void       *outlet;
-    t_symbol   *name;           // registered instance name 
-    t_graf_node *nodes;         // dynamic array (capacity doubles on overflow) 
+    void       *outlet;          // misc query responses: hasnode, size, name, ...
+    void       *outlet_id;       // dedicated: current node id (symbol)
+    void       *outlet_payload;  // dedicated: current node payload (list)
+    void       *outlet_index;    // dedicated: current node's array index (int)
+    t_symbol   *name;           // registered instance name
+    t_graf_node *nodes;         // dynamic array (capacity doubles on overflow)
     long        node_count;
     long        node_capacity;
-    long        next_node_id;   // auto-increment counter for anonymous node IDs 
-    t_symbol   *current;        // current traversal position (NULL if unset) 
+    long        next_node_id;   // auto-increment counter for anonymous node IDs
+    t_symbol   *current;        // current traversal position (NULL if unset)
 } t_graf;
 
 

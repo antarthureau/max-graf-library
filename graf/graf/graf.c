@@ -12,7 +12,7 @@
         next                       — move to a random neighbour of current node
         bang                       — output current node id + payload
         hasnode <id>               — output 1 if node exists, 0 otherwise
-        neighbours <id>            — output all direct neighbours of a node
+        neighbours [id]             — output [neighbour, weight] pairs; id optional, defaults to current node
         adjacent <u> <v>           — output 1 if edge u->v exists, 0 otherwise
         size                       — output number of nodes
         print                      — dump full graph to Max console
@@ -627,7 +627,10 @@ void *graf_new(t_symbol *s, long argc, t_atom *argv)
                         x->node_capacity * sizeof(t_graf_node));
     x->current       = NULL;
 
-    x->outlet = outlet_new(x, NULL);
+    x->outlet         = outlet_new(x, NULL);  // created first -> ends up rightmost (misc/query)
+    x->outlet_index   = outlet_new(x, NULL);
+    x->outlet_payload = outlet_new(x, NULL);
+    x->outlet_id      = outlet_new(x, NULL);  // created last -> ends up leftmost
 
     post("graf: created instance '%s'", x->name->s_name);
     return x;
@@ -660,19 +663,21 @@ void graf_assist(t_graf *x, void *b, long m, long a, char *s)
         sprintf(s,
             "addnode / addedge / goto / next / bang / "
             "clear / read / write / hasnode / ...");
-    else
-        sprintf(s, "node output: id + payload");
+    else {
+            switch (a) {
+                case 0:  sprintf(s, "node id (symbol)");        break;
+                case 1:  sprintf(s, "payload (list)");           break;
+                case 2:  sprintf(s, "node index (int)");         break;
+                default: sprintf(s, "query responses: hasnode / size / name / ..."); break;
+            }
+        }
 }
 
 
 ////////////////////////// message handlers
 
 /**
- * bang — output current node id + payload to the outlet.
- *
- * Output format: node id is the message selector; payload atoms follow.
- * Example (node foo with payload [60, 0.5]): outlet sends "foo 60 0.5"
- * which downstream [route] or [unpack] objects can handle.
+ * bang — output current node id, payload, and index to their dedicated outlets.
  *
  * bang does NOT notify — it is a query, not a state change.
  */
@@ -686,9 +691,10 @@ void graf_bang(t_graf *x)
     t_graf_node *n = graf_find_node(x, x->current);
     if (!n) return;
 
-    outlet_anything(x->outlet, n->id,
-                    n->payload_count,
-                    n->payload_count > 0 ? n->payload : NULL);
+    outlet_int(x->outlet_index, graf_find_node_index(x, n->id));
+    if (n->payload_count > 0)
+        outlet_list(x->outlet_payload, NULL, n->payload_count, n->payload);
+    outlet_anything(x->outlet_id, n->id, 0, NULL);
 }
 
 /**
@@ -916,15 +922,21 @@ void graf_goto(t_graf *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
 
-    if (!graf_find_node(x, id)) {
+    t_graf_node *n = graf_find_node(x, id);
+    if (!n) {
         object_error((t_object *)x, "goto: node '%s' not found", id->s_name);
         return;
     }
     x->current = id;
 
-    outlet_anything(x->outlet, id, 0, NULL);
+    outlet_int(x->outlet_index, graf_find_node_index(x, id));
+    if (n->payload_count > 0)
+        outlet_list(x->outlet_payload, NULL, n->payload_count, n->payload);
+    outlet_anything(x->outlet_id, n->id, 0, NULL);
 
-    post("graf: current -> %s", id->s_name);
+    //DEBUGGING: uncomment to see current node in Max console
+    //post("graf: current -> %s", id->s_name);
+
     object_notify((t_object *)x, gensym("modified"), NULL);
 }
 
@@ -961,9 +973,10 @@ void graf_next(t_graf *x)
     t_graf_node *next_node = graf_find_node(x, x->current);
     if (!next_node) return;
 
-    outlet_anything(x->outlet, next_node->id,
-                    next_node->payload_count,
-                    next_node->payload_count > 0 ? next_node->payload : NULL);
+    outlet_int(x->outlet_index, graf_find_node_index(x, next_node->id));
+    if (next_node->payload_count > 0)
+        outlet_list(x->outlet_payload, NULL, next_node->payload_count, next_node->payload);
+    outlet_anything(x->outlet_id, n->id, 0, NULL);
 
     object_notify((t_object *)x, gensym("modified"), NULL);
 }
@@ -995,25 +1008,33 @@ void graf_hasnode(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 }
 
 /**
- * neighbours <id>
+ * neighbours [id]
  *
- * Output each outgoing neighbour as a separate "neighbour <id>" message.
+ * Output each outgoing neighbour as a separate [neighbour, weight] list.
+ * id is optional — defaults to the current node (same convention as bang).
  * Numeric ids accepted.
- * Equivalent to IGraph.neighbours() in Java.
+ * Equivalent to IGraph.neighbours() in Java, extended with edge weight.
  * Query only — no notify.
  */
 void graf_neighbours(t_graf *x, t_symbol *s, long argc, t_atom *argv)
 {
-    if (argc < 1) {
-        object_error((t_object *)x, "neighbours: requires a node id");
-        return;
-    }
+    t_symbol *id;
 
-    t_symbol *id = graf_atom_to_id(argv);
-    if (!id) {
-        object_error((t_object *)x,
-                     "neighbours: id must be a symbol, int, or float");
-        return;
+    if (argc < 1) {
+        // no id given -> fall back to current node, same convention as bang
+        if (!x->current) {
+            object_error((t_object *)x,
+                         "neighbours: no current node — use 'goto' or supply an id");
+            return;
+        }
+        id = x->current;
+    } else {
+        id = graf_atom_to_id(argv);
+        if (!id) {
+            object_error((t_object *)x,
+                         "neighbours: id must be a symbol, int, or float");
+            return;
+        }
     }
 
     t_graf_node *n = graf_find_node(x, id);
@@ -1028,12 +1049,15 @@ void graf_neighbours(t_graf *x, t_symbol *s, long argc, t_atom *argv)
         return;
     }
 
-    long   i;
-    t_atom a;
+    //outlet a single list of [neighbour, weight] pairs for all outgoing edges
+    t_atom *out = (t_atom *)sysmem_newptr(n->edge_count * 2 * sizeof(t_atom));
+    long    i;
     for (i = 0; i < n->edge_count; i++) {
-        atom_setsym(&a, n->edges_to[i]);
-        outlet_anything(x->outlet, gensym("neighbour"), 1, &a);
+        atom_setsym  (&out[i * 2],     n->edges_to[i]);
+        atom_setfloat(&out[i * 2 + 1], (float)n->edge_weights[i]);
     }
+    outlet_list(x->outlet, NULL, n->edge_count * 2, out);
+    sysmem_freeptr(out);
 }
 
 /**

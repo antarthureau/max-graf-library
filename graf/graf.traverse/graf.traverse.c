@@ -249,7 +249,7 @@ void *graf_traverse_new(t_symbol *s, long argc, t_atom *argv)
     t_graf_traverse *x = (t_graf_traverse *)object_alloc(s_graf_traverse_class);
     if (!x) return NULL;
 
-    /* Validate argument: need exactly one symbol (the graf name) */
+    // Validate argument: need exactly one symbol (the graf name)
     if (argc < 1 || atom_gettype(argv) != A_SYM) {
         object_error((t_object *)x,
                      "graf.traverse: requires a graf name as argument. "
