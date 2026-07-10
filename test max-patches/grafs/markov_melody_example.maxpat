@@ -142,8 +142,8 @@
 					"numinlets" : 2,
 					"numoutlets" : 1,
 					"outlettype" : [ "bang" ],
-					"patching_rect" : [ 33.0, 256.0, 63.0, 22.0 ],
-					"text" : "metro 250"
+					"patching_rect" : [ 33.0, 256.0, 69.0, 22.0 ],
+					"text" : "metro 1000"
 				}
 
 			}
@@ -783,7 +783,7 @@
 					"numoutlets" : 1,
 					"outlettype" : [ "" ],
 					"patching_rect" : [ 72.0, 129.0, 29.5, 22.0 ],
-					"text" : "60"
+					"text" : "65"
 				}
 
 			}
@@ -817,7 +817,7 @@
 					"maxclass" : "graf.affiche",
 					"numinlets" : 1,
 					"numoutlets" : 0,
-					"patching_rect" : [ 46.0, 770.0, 923.0, 256.0 ]
+					"patching_rect" : [ 11.0, 717.0, 1035.0, 596.0 ]
 				}
 
 			}

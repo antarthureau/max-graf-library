@@ -27,7 +27,8 @@
  *   treedown  — roots at bottom, children grow upward.
  *   treeleft  — horizontal, roots at left, children grow rightward.
  *   treeright — roots at right, children grow leftward.
- *   rings     — concentric circles by BFS depth from the roots.
+ *   rings     — concentric circles by BFS depth from the roots; disconnected
+ *               components form separate ring clusters on a coarse grid.
  *
  * Messages:
  *   bang              — force immediate repaint (no layout recompute)
@@ -92,6 +93,9 @@
 #define GAFF_TREE_LEVEL     100.0   /* tree: depth-axis distance per level */
 #define GAFF_TREE_GAP       1.0     /* tree: extra gap between trees, in width units */
 #define GAFF_RING_STEP      90.0    /* rings: radius increment per BFS depth */
+#define GAFF_RING_CLUSTER_MARGIN 90.0 /* rings: clearance between component clusters
+                                         (added to 2 * largest cluster radius to get
+                                         the arrangement grid's cell size) */
 
 /* Edge curving: a non-adjacent edge bows LEFT of its direction of travel by
    GAFF_CURVE_STEP world units per skipped node, capped at a fraction of the
@@ -106,6 +110,9 @@
 #define GAFF_ZOOM_MAX       10.0
 #define GAFF_PAN_STEP       50.0    /* screen px per `move` — constant feel at any zoom */
 #define GAFF_FIT_MARGIN     0.9     /* `reset` fills 90% of the box */
+#define GAFF_FIT_MIN_SPAN   500.0   /* world units — autofit bbox floor: keeps 1-3 node
+                                       graphs near 1:1 instead of over-magnifying;
+                                       tune against a real patch */
 
 /* Label legibility floors: below these the text would be unreadable anyway,
    so skip it — declutters heavily zoomed-out views of large graphs. */
@@ -227,7 +234,8 @@ void  graf_affiche_redraw(t_graf_affiche *x);
 
 /* Layout engine — static so they are private to this translation unit */
 static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph);
-static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth);
+static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth,
+                           long *component);
 static long gaff_edge_skip(t_graf_affiche *x, long i, long ti, long n);
 static void gaff_autofit(t_graf_affiche *x, double view_w, double view_h);
 static long gaff_index_of(t_graf *graph, t_symbol *id);
@@ -395,6 +403,9 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
             if (sym && sym->s_name[0] != '@') { x->graf_name = sym; break; }
         }
     }
+    // TEMP DIAG (issue 3) — remove once the constructor-arg path is confirmed
+    if (x->graf_name)
+        post("graf.affiche: name '%s' found via argv", x->graf_name->s_name);
 
     /* Step 5b: dictionary "args" key */
     if (!x->graf_name && d) {
@@ -408,6 +419,9 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
                 }
             }
         }
+        // TEMP DIAG (issue 3)
+        if (x->graf_name)
+            post("graf.affiche: name '%s' found via dict args", x->graf_name->s_name);
     }
 
     /* Step 5c: dictionary "text" key — tokenize the raw box text.
@@ -441,7 +455,16 @@ void *graf_affiche_new(t_symbol *s, long argc, t_atom *argv)
                 tokidx++;
             }
         }
+        // TEMP DIAG (issue 3)
+        if (x->graf_name)
+            post("graf.affiche: name '%s' found via dict text", x->graf_name->s_name);
     }
+
+    /* Permanent guard: all three lookup stages came up empty — either the box
+       genuinely has no name argument, or the lookup is silently failing. */
+    if (!x->graf_name)
+        object_warn((t_object *)x,
+            "graf.affiche: no instance name found in argv, dict args, or dict text");
 
     /* Subscribe to the named graf instance.
        object_subscribe works by name — the target does not need to exist yet.
@@ -508,6 +531,8 @@ t_max_err graf_affiche_notify(t_graf_affiche *x, t_symbol *s, t_symbol *msg,
                                void *sender, void *data)
 {
     if (msg == gensym("modified")) {
+        // TEMP DIAG (issue 3)
+        post("graf.affiche: got 'modified' notify");
         x->layout_dirty = 1;
         jbox_redraw(&x->box);
     }
@@ -534,6 +559,16 @@ void graf_affiche_bang(t_graf_affiche *x)
  */
 void graf_affiche_update(t_graf_affiche *x, t_symbol *name)
 {
+    /* No-op switch: already watching this instance. Without this guard,
+       `update` to the same name forces layout_full + autofit — a view refit
+       indistinguishable from `reset`. Just repaint, like bang.
+       (First assignment still works: graf_name is NULL then, so any real
+       name fails this comparison and falls through.) */
+    if (name == x->graf_name) {
+        jbox_redraw(&x->box);
+        return;
+    }
+
     if (x->graf_name) {
         object_unsubscribe(CLASS_BOX, x->graf_name,
                            gensym("graf.affiche"), (t_object *)x);
@@ -619,6 +654,8 @@ void graf_affiche_zoom(t_graf_affiche *x, t_symbol *dir)
     x->view_pan_x *= applied;
     x->view_pan_y *= applied;
 
+    // report the APPLIED value — at the clamp bounds it differs from requested
+    post("graf.affiche: zoom %.0f%%", x->view_zoom * 100.0);
     jbox_redraw(&x->box);
 }
 
@@ -638,6 +675,7 @@ void graf_affiche_move(t_graf_affiche *x, t_symbol *dir)
         return;
     }
 
+    post("graf.affiche: pan %.0f %.0f", x->view_pan_x, x->view_pan_y);
     jbox_redraw(&x->box);
 }
 
@@ -660,6 +698,7 @@ void graf_affiche_reset(t_graf_affiche *x)
         gaff_autofit(x, rect.width, rect.height);
     }
 
+    post("graf.affiche: reset — zoom %.0f%%", x->view_zoom * 100.0);
     jbox_redraw(&x->box);
 }
 
@@ -685,6 +724,7 @@ void graf_affiche_center(t_graf_affiche *x)
                so pan = -world*zoom */
             x->view_pan_x = -x->pos[i].wx * x->view_zoom;
             x->view_pan_y = -x->pos[i].wy * x->view_zoom;
+            post("graf.affiche: centered on '%s'", graph->current->s_name);
             jbox_redraw(&x->box);
             return;
         }
@@ -708,6 +748,7 @@ void graf_affiche_redraw(t_graf_affiche *x)
         x->rand_seed = x->rand_seed * 6364136223846793005ULL + 1442695040888963407ULL;
     }
 
+    post("graf.affiche: redraw (%s)", gaff_mode_name(x->mode));
     x->layout_dirty = 1;
     x->layout_full  = 1;
     jbox_redraw(&x->box);
@@ -794,23 +835,37 @@ static double gaff_hash01(unsigned long long h)
  * edge by paint, it never re-places the node.
  *
  * Outputs (caller-allocated, length n):
- *   order[]  — node indices in BFS placement order. Children of a node are
- *              CONTIGUOUS in this array, in out-edge order — the property
- *              the Reingold–Tilford pass in gaff_layout_sync relies on.
- *   parent[] — BFS parent as a node index, -1 for roots/pseudo-roots
- *   depth[]  — distance from the root
+ *   order[]     — node indices in BFS placement order. Children of a node are
+ *                 CONTIGUOUS in this array, in out-edge order — the property
+ *                 the Reingold–Tilford pass in gaff_layout_sync relies on.
+ *   parent[]    — BFS parent as a node index, -1 for roots/pseudo-roots
+ *   depth[]     — distance from the root
+ *   component[] — WEAKLY-CONNECTED component id, dense 0..K-1 in insertion
+ *                 order. Computed by union-find over all edges with direction
+ *                 ignored — NOT per BFS root: two roots that converge on a
+ *                 shared node are one component (they are connected), so
+ *                 rings keeps them in one cluster sharing the half-step
+ *                 depth-0 ring. Only genuinely disconnected islands (including
+ *                 pure-cycle pseudo-root islands) get distinct ids.
+ *                 Trees ignore this array; rings uses it for clustering.
  *
  * Returns the number of placed nodes (always n), or -1 on allocation failure.
+ *
+ * Java analogy for union-find: a disjoint-set forest — each entry points at
+ * its parent set, find() walks to the root (halving the path as it goes),
+ * union() hangs one root under the other.
  *
  * Java analogy: a textbook BFS over an adjacency list, except "the queue" and
  * "the result order" are the same array — order[] never pops, it just grows
  * while qhead chases qlen.
  */
-static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth)
+static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth,
+                           long *component)
 {
     long  n = graph->node_count;
     long  i, j, qhead = 0, qlen = 0;
-    long *indeg   = (long *)sysmem_newptr(n * sizeof(long));
+    // one block: first n longs = in-degree, second n = union-find parents
+    long *indeg   = (long *)sysmem_newptr(2 * n * sizeof(long));
     char *visited = (char *)sysmem_newptr(n * sizeof(char));
 
     if (!indeg || !visited) {
@@ -818,16 +873,37 @@ static long gaff_tree_bfs(t_graf *graph, long *order, long *parent, long *depth)
         if (visited) sysmem_freeptr(visited);
         return -1;
     }
+    long *uf = indeg + n;
 
-    for (i = 0; i < n; i++) { indeg[i] = 0; visited[i] = 0; }
+    for (i = 0; i < n; i++) { indeg[i] = 0; visited[i] = 0; uf[i] = i; }
 
-    // in-degree count over all edges, self-loops excluded
+    // in-degree count over all edges, self-loops excluded;
+    // same pass unions the endpoints (direction ignored) for weak connectivity
     for (i = 0; i < n; i++) {
         t_graf_node *src = &graph->nodes[i];
         for (j = 0; j < src->edge_count; j++) {
             long ti = gaff_index_of(graph, src->edges_to[j]);
-            if (ti >= 0 && ti != i)
+            if (ti >= 0 && ti != i) {
                 indeg[ti]++;
+                // find both roots (path halving), hang the larger under the smaller
+                long a = i, b = ti;
+                while (uf[a] != a) { uf[a] = uf[uf[a]]; a = uf[a]; }
+                while (uf[b] != b) { uf[b] = uf[uf[b]]; b = uf[b]; }
+                if (a != b) { if (a < b) uf[b] = a; else uf[a] = b; }
+            }
+        }
+    }
+
+    /* Flatten union-find into dense component ids, numbered 0..K-1 by lowest
+       insertion index. Because union always keeps the smaller index as root,
+       every set root is its own component's first node — so a root's id is
+       always assigned before any member that points at it. */
+    {
+        long ncomp = 0;
+        for (i = 0; i < n; i++) {
+            long r = i;
+            while (uf[r] != r) r = uf[r];
+            component[i] = (r == i) ? ncomp++ : component[r];
         }
     }
 
@@ -1056,10 +1132,10 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
         /* Spanning forest by BFS, then either Reingold–Tilford subtree-width
            placement (trees) or concentric rings by depth (rings).
 
-           Scratch layout: five long arrays + three double arrays, all length
-           n, allocated as one block. Java analogy: a bunch of local int[n] /
+           Scratch layout: four long arrays + three double arrays, all length
+           n, allocated as two blocks. Java analogy: a bunch of local int[n] /
            double[n] — C just makes you do the arena arithmetic yourself. */
-        long   *order  = (long *)sysmem_newptr(3 * n * sizeof(long));
+        long   *order  = (long *)sysmem_newptr(4 * n * sizeof(long));
         double *width  = (double *)sysmem_newptr(3 * n * sizeof(double));
         if (!order || !width) {
             if (order) sysmem_freeptr(order);
@@ -1067,12 +1143,13 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
             object_error((t_object *)x, "layout: out of memory");
             return;
         }
-        long   *parent = order + n;
-        long   *depth  = order + 2 * n;
+        long   *parent    = order + n;
+        long   *depth     = order + 2 * n;
+        long   *component = order + 3 * n;  // weakly-connected component ids (rings)
         double *center = width + n;     // subtree center along the sibling axis
         double *ccur   = width + 2 * n; // per-node cursor for placing children
 
-        if (gaff_tree_bfs(graph, order, parent, depth) < 0) {
+        if (gaff_tree_bfs(graph, order, parent, depth, component) < 0) {
             sysmem_freeptr(order);
             sysmem_freeptr(width);
             object_error((t_object *)x, "layout: out of memory");
@@ -1080,40 +1157,81 @@ static void gaff_layout_sync(t_graf_affiche *x, t_graf *graph)
         }
 
         if (x->mode == GAFF_MODE_RINGS) {
-            /* Concentric rings: nodes at BFS depth d sit on a circle of radius
-               d * GAFF_RING_STEP, evenly spaced in BFS order, 12 o'clock start.
-               A single depth-0 node sits at the exact center; several roots
-               share a small half-step ring instead of overlapping. */
-            long qi, maxd = 0;
+            /* Concentric rings, PER COMPONENT: within one weakly-connected
+               component, nodes at BFS depth d sit on a circle of radius
+               d * GAFF_RING_STEP, evenly spaced in BFS order, 12 o'clock
+               start. A single depth-0 node sits at the exact component
+               center; several roots share a small half-step ring.
+
+               Disconnected components each get their OWN ring cluster, laid
+               out in local polar coordinates and translated to a cell on a
+               coarse grid (same row/col math as GAFF_MODE_GRID): cell size =
+               2 * largest component radius + margin, row length =
+               ceil(sqrt(component count)). A single-component graph gets
+               exactly one cell at the origin — behavior unchanged. */
+            long qi, c, ncomp = 0;
             for (k = 0; k < n; k++)
-                if (depth[k] > maxd) maxd = depth[k];
+                if (component[k] >= ncomp) ncomp = component[k] + 1;
 
-            // reuse width[] as per-ring counters/indices (doubles hold small ints fine)
-            for (k = 0; k <= maxd; k++) width[k] = 0.0;
-            for (k = 0; k < n; k++) width[depth[k]] += 1.0;    // ring populations
-            for (k = 0; k <= maxd; k++) center[k] = 0.0;       // ring fill index
-
-            for (qi = 0; qi < n; qi++) {
-                long v   = order[qi];
-                long d   = depth[v];
-                double cnt = width[d];
-                double idx = center[d];
-                center[d] += 1.0;
-
-                double radius = (d == 0)
-                    ? (cnt > 1.0 ? GAFF_RING_STEP * 0.5 : 0.0)
-                    : (double)d * GAFF_RING_STEP;
-                double angle  = (cnt > 0.0)
-                    ? (2.0 * M_PI * idx / cnt) - M_PI * 0.5
-                    : -M_PI * 0.5;
-
-                x->pos[v].id     = graph->nodes[v].id;
-                x->pos[v].wx     = radius * cos(angle);
-                x->pos[v].wy     = radius * sin(angle);
-                x->pos[v].cell   = -1;
-                x->pos[v].parent = parent[v];
-                x->pos[v].depth  = d;
+            // per-component max BFS depth -> per-component bounding radius
+            long *cmaxd = (long *)sysmem_newptr(ncomp * sizeof(long));
+            if (!cmaxd) {
+                sysmem_freeptr(order);
+                sysmem_freeptr(width);
+                object_error((t_object *)x, "layout: out of memory");
+                return;
             }
+            for (c = 0; c < ncomp; c++) cmaxd[c] = 0;
+            for (k = 0; k < n; k++)
+                if (depth[k] > cmaxd[component[k]]) cmaxd[component[k]] = depth[k];
+
+            double maxrad = 0.0;
+            for (c = 0; c < ncomp; c++) {
+                double rad = (double)cmaxd[c] * GAFF_RING_STEP + GAFF_NODE_RADIUS;
+                if (rad > maxrad) maxrad = rad;
+            }
+
+            long rowlen = (long)ceil(sqrt((double)ncomp));
+            if (rowlen < 1) rowlen = 1;
+            double cellsize = 2.0 * maxrad + GAFF_RING_CLUSTER_MARGIN;
+
+            /* Position one component at a time: its own per-depth population
+               and fill index (width[]/center[] reused per component — depths
+               are local, so only entries 0..cmaxd[c] are touched), then
+               translate the local polar coords by the component's grid cell. */
+            for (c = 0; c < ncomp; c++) {
+                long maxd = cmaxd[c];
+                for (k = 0; k <= maxd; k++) { width[k] = 0.0; center[k] = 0.0; }
+                for (k = 0; k < n; k++)
+                    if (component[k] == c) width[depth[k]] += 1.0;  // ring populations
+
+                double ox = (double)(c % rowlen) * cellsize;        // cell world offset
+                double oy = (double)(c / rowlen) * cellsize;
+
+                for (qi = 0; qi < n; qi++) {
+                    long v = order[qi];
+                    if (component[v] != c) continue;
+                    long d = depth[v];
+                    double cnt = width[d];
+                    double idx = center[d];
+                    center[d] += 1.0;
+
+                    double radius = (d == 0)
+                        ? (cnt > 1.0 ? GAFF_RING_STEP * 0.5 : 0.0)
+                        : (double)d * GAFF_RING_STEP;
+                    double angle  = (cnt > 0.0)
+                        ? (2.0 * M_PI * idx / cnt) - M_PI * 0.5
+                        : -M_PI * 0.5;
+
+                    x->pos[v].id     = graph->nodes[v].id;
+                    x->pos[v].wx     = ox + radius * cos(angle);
+                    x->pos[v].wy     = oy + radius * sin(angle);
+                    x->pos[v].cell   = -1;
+                    x->pos[v].parent = parent[v];
+                    x->pos[v].depth  = d;
+                }
+            }
+            sysmem_freeptr(cmaxd);
         } else {
             /* Simplified Reingold–Tilford, two passes over the BFS order:
 
@@ -1258,8 +1376,12 @@ static void gaff_autofit(t_graf_affiche *x, double view_w, double view_h)
     double pad = GAFF_NODE_RADIUS + 8.0;            // world-space padding
     double bw  = (maxx - minx) + 2.0 * pad;
     double bh  = (maxy - miny) + 2.0 * pad;
-    if (bw < 1.0) bw = 1.0;
-    if (bh < 1.0) bh = 1.0;
+    /* Floor the fit box: a 1-node graph's real bbox is ~2*pad, which a 400px
+       view would "fit" at 5x zoom — absurd magnification exactly when nodes
+       are being typed in one at a time. Once the real bbox exceeds the floor,
+       autofit behaves exactly as before. */
+    if (bw < GAFF_FIT_MIN_SPAN) bw = GAFF_FIT_MIN_SPAN;
+    if (bh < GAFF_FIT_MIN_SPAN) bh = GAFF_FIT_MIN_SPAN;
 
     double zx = view_w * GAFF_FIT_MARGIN / bw;
     double zy = view_h * GAFF_FIT_MARGIN / bh;
@@ -1709,8 +1831,10 @@ void graf_affiche_paint(t_graf_affiche *x, t_object *patcherview)
 draw_name_label:
     if (x->graf_name) {
         char corner[160];
-        snprintf(corner, sizeof(corner), "%s  [%s]",
-                 x->graf_name->s_name, gaff_mode_name(x->mode));
+        // always-visible readout: instance, mode, current zoom
+        snprintf(corner, sizeof(corner), "%s [%s] %.0f%%",
+                 x->graf_name->s_name, gaff_mode_name(x->mode),
+                 x->view_zoom * 100.0);
 
         t_jfont *font = jfont_create("Arial",
                                       JGRAPHICS_FONT_SLANT_NORMAL,
