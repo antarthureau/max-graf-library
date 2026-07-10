@@ -246,7 +246,7 @@ The conceptual baseline for the algorithms and data structures in `graf` (and mu
 by Robert Sedgewick and Kevin Wayne.
 
 
-`graf` is nonetheless an original C implementation for the Max/MSP environment, not a derivative of their codebase, but the algorithmic thinking owes them a real debt.
+`graf` is nonetheless an original C implementation for the Max/MSP environment, not a derivative of their codebase.
 
 -----
 
