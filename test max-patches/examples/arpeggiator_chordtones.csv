@@ -1,0 +1,26 @@
+# graf CSV — graph data file
+# nodes: n, id [, payload...]
+# edges: e, from, to [, weight]
+n, 48
+n, 52
+n, 55
+n, 59
+n, 60
+n, 62
+n, 64
+n, 67
+n, 71
+n, 74
+e, 48, 52
+e, 52, 55
+e, 55, 59
+e, 59, 62
+e, 48, 60
+e, 52, 64
+e, 55, 67
+e, 59, 71
+e, 62, 74
+e, 60, 64
+e, 64, 67
+e, 67, 71
+e, 71, 74

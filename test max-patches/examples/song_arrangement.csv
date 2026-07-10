@@ -1,0 +1,17 @@
+# graf CSV — graph data file
+# nodes: n, id [, payload...]
+# edges: e, from, to [, weight]
+n, intro
+n, verse
+n, chorus
+n, bridge
+n, outro
+e, intro, verse, 1
+e, verse, chorus, 5
+e, verse, bridge, 1
+e, chorus, verse, 3
+e, chorus, bridge, 2
+e, chorus, outro, 1
+e, bridge, chorus, 4
+e, bridge, outro, 1
+e, outro, outro, 1
