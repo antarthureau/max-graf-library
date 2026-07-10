@@ -543,15 +543,14 @@ void graf_affiche_assist(t_graf_affiche *x, void *b, long m, long a, char *s)
 t_max_err graf_affiche_notify(t_graf_affiche *x, t_symbol *s, t_symbol *msg,
                                void *sender, void *data)
 {
-    /** DIAGNOSTIC: uncomment to see all notifications in the console
+    
     if (msg == gensym("modified")) {
-        // TEMP DIAG (issue 3)
-        post("graf.affiche: got 'modified' notify");
+        // TEMP DIAG (issue 3) uncomment to see notification in console
+        //post("graf.affiche: got 'modified' notify");
         x->layout_dirty = 1;
         jbox_redraw(&x->box);
     }
-    else if (msg == gensym("attr_modified")) { */
-    if (msg == gensym("attr_modified")) {
+    else if (msg == gensym("attr_modified")) {
         jbox_redraw(&x->box);
     }
     return MAX_ERR_NONE;
